@@ -178,6 +178,7 @@ export default function LabelerApp() {
       const { data: d2 } = await supabase
         .from('mattrack_matches')
         .select('id, red_name, green_name, event_name, video_id, status, mattrack_videos(filename)')
+        .neq('status', 'complete')
         .order('created_at', { ascending: false })
         .limit(20)
       setRecentMatches((d2 || []) as unknown as ExistingMatch[])

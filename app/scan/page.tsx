@@ -1,9 +1,9 @@
 'use client'
 
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
 import { detectRefMotion, MotionCandidate, DetectionProgress } from '@/lib/motionDetector'
-import { SIGNAL_GROUPS, CATEGORY_COLOR, Signal } from '@/lib/signals'
+import { SIGNAL_GROUPS, Signal } from '@/lib/signals'
 
 const fmt = (s: number) => { const m = Math.floor(s / 60), sec = Math.floor(s % 60); return `${m}:${sec.toString().padStart(2, '0')}` }
 
@@ -17,7 +17,34 @@ const primaryBtn: React.CSSProperties = {
   letterSpacing: 2, fontWeight: 'bold', width: '100%',
 }
 
-interface MatchOption { id: string; red_name: string; green_name: string; event_name: string }
+interface VideoInfo { videoId: string; matchId: string; labelCount: number; redName: string; greenName: string }
+
+
+// ── Name prompt component ─────────────────────────────────────
+function NamePrompt({ onConfirm, defaultRed, defaultGreen }: { onConfirm: (r: string, g: string) => void; defaultRed: string; defaultGreen: string }) {
+  const [red, setRed] = useState(defaultRed)
+  const [green, setGreen] = useState(defaultGreen)
+  const inputStyle: React.CSSProperties = {
+    background: '#0a0a0f', border: '1px solid #1a1a2e', color: '#e0e0f0',
+    fontFamily: "'Courier New',monospace", fontSize: 13, padding: '8px 10px', width: '100%', outline: 'none',
+  }
+  return (
+    <div style={{ background: '#0d0d1a', border: '1px solid #1a1a2e', padding: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{ fontSize: 11, color: '#666', letterSpacing: 2 }}>WRESTLER NAMES</div>
+      <div>
+        <div style={{ fontSize: 10, color: '#ff4444', marginBottom: 4 }}>RED WRESTLER</div>
+        <input value={red} onChange={e => setRed(e.target.value)} style={inputStyle} placeholder="e.g. Frank DiMarzio" />
+      </div>
+      <div>
+        <div style={{ fontSize: 10, color: '#00cc66', marginBottom: 4 }}>GREEN WRESTLER</div>
+        <input value={green} onChange={e => setGreen(e.target.value)} style={inputStyle} placeholder="Opponent name" />
+      </div>
+      <button onClick={() => onConfirm(red, green)} style={{ background: '#ff0055', border: 'none', color: '#fff', padding: '10px 0', cursor: 'pointer', fontFamily: "'Courier New',monospace", fontSize: 12, letterSpacing: 2, fontWeight: 'bold' }}>
+        CONFIRM → READY TO SCAN
+      </button>
+    </div>
+  )
+}
 
 export default function ScanPage() {
   const videoRef = useRef<HTMLVideoElement>(null)
@@ -28,7 +55,12 @@ export default function ScanPage() {
   const [videoName, setVideoName] = useState('')
   const [videoId, setVideoId] = useState<string | null>(null)
   const [matchId, setMatchId] = useState<string | null>(null)
-  const [matchOptions, setMatchOptions] = useState<MatchOption[]>([])
+  const [videoInfo, setVideoInfo] = useState<VideoInfo | null>(null)
+  const [redName, setRedName] = useState('')
+  const [greenName, setGreenName] = useState('')
+  const [showNamePrompt, setShowNamePrompt] = useState(false)
+  const [existingLabelCount, setExistingLabelCount] = useState(0)
+  const [alreadyScanned, setAlreadyScanned] = useState(false)
 
   // Scan state
   const [scanning, setScanning] = useState(false)
@@ -53,22 +85,85 @@ export default function ScanPage() {
   const current = pending[0] || null
   const reviewed = candidates.filter(c => c.status !== 'pending').length
 
-  // Load video + existing matches
   const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]; if (!file) return
     const url = URL.createObjectURL(file)
     setVideoSrc(url); setVideoName(file.name)
-    setCandidates([]); setSavedCount(0); setSkippedCount(0); setCurrentIdx(0)
+    setCandidates([]); setSavedCount(0); setSkippedCount(0)
+    setVideoId(null); setMatchId(null); setVideoInfo(null)
+    setAlreadyScanned(false); setExistingLabelCount(0)
 
-    // Find existing video record
-    const { data: vids } = await supabase.from('mattrack_videos').select('id').eq('filename', file.name).limit(1)
+    // Check if video already registered
+    const { data: vids } = await supabase
+      .from('mattrack_videos').select('id').eq('filename', file.name).limit(1)
+
     if (vids && vids.length > 0) {
       const vid = vids[0]
-      setVideoId(vid.id)
-      const { data: matches } = await supabase.from('mattrack_matches').select('id, red_name, green_name, event_name').eq('video_id', vid.id)
-      setMatchOptions(matches || [])
-      if (matches && matches.length > 0) setMatchId(matches[0].id)
+      // Get match + label count
+      const { data: matches } = await supabase
+        .from('mattrack_matches')
+        .select('id, red_name, green_name')
+        .eq('video_id', vid.id)
+        .limit(1)
+      const { count } = await supabase
+        .from('mattrack_signal_instances')
+        .select('id', { count: 'exact', head: true })
+        .eq('video_id', vid.id)
+      const labelCount = count || 0
+      if (matches && matches.length > 0) {
+        setVideoId(vid.id)
+        setMatchId(matches[0].id)
+        setRedName(matches[0].red_name)
+        setGreenName(matches[0].green_name)
+        setExistingLabelCount(labelCount)
+        if (labelCount > 0) setAlreadyScanned(true)
+        setVideoInfo({ videoId: vid.id, matchId: matches[0].id, labelCount, redName: matches[0].red_name, greenName: matches[0].green_name })
+      } else {
+        // Video registered but no match — show name prompt
+        setVideoId(vid.id)
+        setShowNamePrompt(true)
+      }
+    } else {
+      // New video — show name prompt to auto-register
+      setShowNamePrompt(true)
     }
+  }
+
+  const autoRegister = async (redN: string, greenN: string) => {
+    // Register video record
+    const vid = videoRef.current
+    let currentVideoId = videoId
+    if (!currentVideoId) {
+      const { data, error } = await supabase.from('mattrack_videos').insert({
+        filename: videoName,
+        duration_seconds: vid?.duration || 0,
+        fps: 30,
+        width_px: vid?.videoWidth,
+        height_px: vid?.videoHeight,
+        camera_angle: 'broadcast',
+        venue_type: 'tournament_multi_mat',
+        ambient_whistle_density: 'high',
+        estimated_mat_count: 20,
+      }).select().single()
+      if (error) { showToast('Registration error: ' + error.message, 'err'); return }
+      currentVideoId = data.id
+      setVideoId(currentVideoId)
+    }
+    // Register match record
+    const { data: match, error: me } = await supabase.from('mattrack_matches').insert({
+      video_id: currentVideoId,
+      red_name: redN || 'Wrestler A',
+      green_name: greenN || 'Wrestler B',
+      match_start_frame: 0,
+      total_periods: 3,
+    }).select().single()
+    if (me) { showToast('Match error: ' + me.message, 'err'); return }
+    setMatchId(match.id)
+    setRedName(redN || 'Wrestler A')
+    setGreenName(greenN || 'Wrestler B')
+    setShowNamePrompt(false)
+    setVideoInfo({ videoId: currentVideoId!, matchId: match.id, labelCount: 0, redName: redN, greenName: greenN })
+    showToast('Video registered ✓ — ready to scan')
   }
 
   // Preview loop for current candidate
@@ -87,8 +182,9 @@ export default function ScanPage() {
   }, [current?.id, videoSrc])
 
   const runScan = async () => {
-    const video = videoRef.current; if (!video) return
+    const video = videoRef.current; if (!video || !matchId) return
     setScanning(true); setCandidates([]); setSavedCount(0); setSkippedCount(0)
+    setAlreadyScanned(false)
     showToast('Scanning video for ref movement…')
     try {
       const results = await detectRefMotion(video, (p) => setScanProgress(p))
@@ -203,32 +299,35 @@ export default function ScanPage() {
 
             <div style={{ fontSize: 11, color: '#00ff88', letterSpacing: 1 }}>✓ {videoName}</div>
 
-            {/* Match selector */}
-            {matchOptions.length > 0 ? (
-              <div>
-                <div style={{ fontSize: 10, color: '#555', letterSpacing: 2, marginBottom: 8 }}>MATCH</div>
-                {matchOptions.map(m => (
-                  <button key={m.id} onClick={() => setMatchId(m.id)} style={{
-                    ...btn, width: '100%', textAlign: 'left', marginBottom: 6,
-                    background: matchId === m.id ? '#1a1a2e' : 'transparent',
-                    color: matchId === m.id ? '#fff' : '#555',
-                    borderColor: matchId === m.id ? '#ff0055' : '#1a1a2e',
-                  }}>
-                    {m.red_name} vs {m.green_name}{m.event_name ? ` — ${m.event_name}` : ''}
-                  </button>
-                ))}
-              </div>
-            ) : (
-              <div style={{ background: '#1a0d0d', border: '1px solid #f87171', padding: 12, fontSize: 11, color: '#f87171' }}>
-                No match found for this video. <a href="/labeler" style={{ color: '#ff0055' }}>Register it in the labeler first →</a>
+            {/* Name prompt — new or unmatched video */}
+            {showNamePrompt && (
+              <NamePrompt
+                onConfirm={autoRegister}
+                defaultRed={typeof window !== 'undefined' ? JSON.parse(localStorage.getItem('mattrack_defaults') || '{}').red_name || '' : ''}
+                defaultGreen={typeof window !== 'undefined' ? JSON.parse(localStorage.getItem('mattrack_defaults') || '{}').green_name || '' : ''}
+              />
+            )}
+
+            {/* Already scanned warning */}
+            {alreadyScanned && !showNamePrompt && (
+              <div style={{ background: '#1a1200', border: '1px solid #fbbf24', padding: 12, fontSize: 11, color: '#fbbf24', lineHeight: 1.8 }}>
+                ⚠️ This video already has <strong>{existingLabelCount} labels</strong>. Rescanning may create duplicates near already-labeled moments. Proceed anyway?
+                <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                  <button onClick={() => setAlreadyScanned(false)} style={{ ...btn, color: '#fbbf24', borderColor: '#fbbf24', padding: '6px 14px' }}>RESCAN ANYWAY</button>
+                  <a href="/labeler" style={{ ...btn, color: '#555', textDecoration: 'none', padding: '6px 14px' }}>USE MANUAL LABELER</a>
+                </div>
               </div>
             )}
 
-            {/* Scan button */}
-            {matchId && (
+            {/* Match confirmed — ready to scan */}
+            {videoInfo && !alreadyScanned && !showNamePrompt && (
               <div>
+                <div style={{ background: '#0d1a0d', border: '1px solid #00ff88', padding: 12, fontSize: 11, color: '#00ff88', marginBottom: 12 }}>
+                  <span style={{ color: '#ff4444' }}>{videoInfo.redName}</span> vs <span style={{ color: '#00cc66' }}>{videoInfo.greenName}</span>
+                  {videoInfo.labelCount > 0 && <span style={{ color: '#555', marginLeft: 8 }}>· {videoInfo.labelCount} existing labels</span>}
+                </div>
                 <div style={{ fontSize: 10, color: '#444', lineHeight: 1.8, marginBottom: 12 }}>
-                  The scanner will analyze the video at 2fps, detect the referee by their grey/black uniform, and flag moments of high arm movement. Takes about 1 second per minute of video.
+                  Analyzes at 2fps · detects ref by grey/black uniform · flags arm movement · ~1 sec per minute of video
                 </div>
                 <button onClick={runScan} disabled={scanning} style={{ ...primaryBtn, opacity: scanning ? 0.5 : 1 }}>
                   {scanning ? '⚡ SCANNING…' : '⚡ SCAN FOR REF MOVEMENT'}
@@ -318,8 +417,8 @@ export default function ScanPage() {
                 {/* Wrestler selector + period */}
                 <div style={{ padding: '10px 14px', background: '#0d0d1a', borderBottom: '1px solid #1a1a2e', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                   <span style={{ fontSize: 10, color: '#555' }}>AWARD TO:</span>
-                  <button onClick={() => setWrestler('red')} style={{ ...btn, background: wrestler === 'red' ? '#cc2222' : 'transparent', color: wrestler === 'red' ? '#fff' : '#ff4444', borderColor: '#ff4444', padding: '5px 14px' }}>RED</button>
-                  <button onClick={() => setWrestler('green')} style={{ ...btn, background: wrestler === 'green' ? '#007733' : 'transparent', color: wrestler === 'green' ? '#fff' : '#00cc66', borderColor: '#00cc66', padding: '5px 14px' }}>GREEN</button>
+                  <button onClick={() => setWrestler('red')} style={{ ...btn, background: wrestler === 'red' ? '#cc2222' : 'transparent', color: wrestler === 'red' ? '#fff' : '#ff4444', borderColor: '#ff4444', padding: '5px 14px' }}>{redName || 'RED'}</button>
+                  <button onClick={() => setWrestler('green')} style={{ ...btn, background: wrestler === 'green' ? '#007733' : 'transparent', color: wrestler === 'green' ? '#fff' : '#00cc66', borderColor: '#00cc66', padding: '5px 14px' }}>{greenName || 'GREEN'}</button>
                   <span style={{ fontSize: 10, color: '#555', marginLeft: 8 }}>PERIOD:</span>
                   {[1,2,3].map(p => <button key={p} onClick={() => setPeriod(p)} style={{ ...btn, background: period === p ? '#ff0055' : 'transparent', color: period === p ? '#fff' : '#555', padding: '5px 10px', width: 32 }}>{p}</button>)}
                   <span style={{ fontSize: 10, color: '#555', marginLeft: 8 }}>CONF:</span>

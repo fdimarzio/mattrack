@@ -173,7 +173,7 @@ export default function LabelerApp() {
   const loadRecentMatches = async () => {
     const { data, error } = await supabase.rpc('get_matches_with_signal_count')
     if (error || !data) {
-      // fallback
+      // fallback if RPC fails
       const { data: d2 } = await supabase
         .from('mattrack_matches')
         .select('id, red_name, green_name, event_name, video_id, status, mattrack_videos(filename)')
@@ -181,7 +181,9 @@ export default function LabelerApp() {
         .limit(20)
       setRecentMatches((d2 || []) as unknown as ExistingMatch[])
     } else {
-      setRecentMatches(data as unknown as ExistingMatch[])
+      // RPC returns JSON — may be array or JSON string
+      const parsed = Array.isArray(data) ? data : (data ? [data] : [])
+      setRecentMatches(parsed as unknown as ExistingMatch[])
     }
   }
 
@@ -493,29 +495,30 @@ export default function LabelerApp() {
           )}
           {recentMatches.map(m => (
             <div key={m.id} style={{ background: '#0d0d1a', border: `1px solid ${m.status === 'complete' ? '#00ff88' : '#1a1a2e'}`, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {/* Match info */}
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                <div>
-                  <div style={{ fontSize: 13, fontWeight: 'bold', color: '#e0e0f0' }}>
-                    {m.red_name} vs {m.green_name}
+                <div style={{ flex: 1 }}>
+                  {/* Wrestler names — red vs green */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 13, fontWeight: 'bold', color: '#ff4444' }}>{m.red_name}</span>
+                    <span style={{ fontSize: 11, color: '#444' }}>vs</span>
+                    <span style={{ fontSize: 13, fontWeight: 'bold', color: '#00cc66' }}>{m.green_name}</span>
                   </div>
-                  <div style={{ fontSize: 10, color: '#555', marginTop: 2, display: 'flex', gap: 10 }}>
-                    {m.event_name && <span>{m.event_name}</span>}
+                  <div style={{ fontSize: 10, color: '#555', marginTop: 3, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    {m.event_name && <span style={{ color: '#888' }}>{m.event_name}</span>}
                     <span>{m.mattrack_videos?.filename}</span>
                   </div>
+                  <div style={{ marginTop: 4 }}>
+                    <span style={{ fontSize: 9, padding: '2px 8px', border: `1px solid ${m.status === 'complete' ? '#00ff88' : '#333'}`, color: m.status === 'complete' ? '#00ff88' : '#555', letterSpacing: 1 }}>
+                      {(m.status || 'in_progress').toUpperCase().replace('_', ' ')}
+                    </span>
+                  </div>
                 </div>
-                <div style={{ textAlign: 'right' }}>
-                  <div style={{ fontSize: 18, fontWeight: 'bold', color: m.signal_count > 0 ? '#00ff88' : '#333' }}>
+                <div style={{ textAlign: 'right', minWidth: 52 }}>
+                  <div style={{ fontSize: 28, fontWeight: 'bold', color: (m.signal_count || 0) > 0 ? '#00ff88' : '#222', lineHeight: 1 }}>
                     {m.signal_count || 0}
                   </div>
-                  <div style={{ fontSize: 9, color: '#444' }}>LABELS</div>
+                  <div style={{ fontSize: 9, color: '#444', letterSpacing: 1 }}>LABELS</div>
                 </div>
-              </div>
-              {/* Status badge */}
-              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                <span style={{ fontSize: 9, padding: '2px 8px', border: `1px solid ${m.status === 'complete' ? '#00ff88' : '#333'}`, color: m.status === 'complete' ? '#00ff88' : '#555', letterSpacing: 1 }}>
-                  {(m.status || 'in_progress').toUpperCase().replace('_', ' ')}
-                </span>
               </div>
               {/* Action buttons */}
               <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>

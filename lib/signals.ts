@@ -82,11 +82,11 @@ export const SIGNALS: Signal[] = [
 
   // ── SCORING — RED WRESTLER ─────────────────────────────────
   {
-    id: 'takedown_2pt_red',
-    label: 'Takedown 2pt — Red',
-    points: 2, category: 'scoring', color: '#ff4444',
-    fingers: 2, requiresWrestler: true,
-    notes: 'Red scores takedown — ref signals 2 fingers toward red',
+    id: 'takedown_3pt_red',
+    label: 'Takedown 3pt — Red',
+    points: 3, category: 'scoring', color: '#ff4444',
+    fingers: 3, requiresWrestler: true,
+    notes: 'Red scores takedown — ref signals 3 fingers toward red',
   },
   {
     id: 'escape_1pt_red',
@@ -141,11 +141,11 @@ export const SIGNALS: Signal[] = [
 
   // ── SCORING — GREEN WRESTLER ───────────────────────────────
   {
-    id: 'takedown_2pt_green',
-    label: 'Takedown 2pt — Green',
-    points: 2, category: 'scoring', color: '#00cc66',
-    fingers: 2, requiresWrestler: true,
-    notes: 'Green scores takedown — ref signals 2 fingers toward green',
+    id: 'takedown_3pt_green',
+    label: 'Takedown 3pt — Green',
+    points: 3, category: 'scoring', color: '#00cc66',
+    fingers: 3, requiresWrestler: true,
+    notes: 'Green scores takedown — ref signals 3 fingers toward green',
   },
   {
     id: 'escape_1pt_green',

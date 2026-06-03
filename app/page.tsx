@@ -11,7 +11,8 @@ export default function Home() {
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12, width: '100%', maxWidth: 680, padding: '0 20px' }}>
         {[
-          { href: '/labeler', label: '✏️ LABEL', desc: 'Label signals in match video', color: '#ff0055' },
+          { href: '/labeler', label: '✏️ LABEL', desc: 'Manual label signals in video', color: '#ff0055' },
+          { href: '/scan', label: '⚡ SCAN', desc: 'Motion-detect + rapid label', color: '#fbbf24' },
           { href: '/export', label: '↓ EXPORT', desc: 'Export training data', color: '#00ff88' },
           { href: '/review', label: '🔍 REVIEW', desc: 'Inference review + whistle QA', color: '#38bdf8' },
         ].map(p => (

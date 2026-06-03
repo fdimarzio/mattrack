@@ -85,6 +85,8 @@ interface ExistingMatch {
   green_name: string
   event_name: string
   video_id: string
+  status: string
+  signal_count: number
   mattrack_videos: { filename: string }
 }
 
@@ -163,11 +165,20 @@ export default function LabelerApp() {
   // Load recent matches on mount
   useEffect(() => {
     supabase
-      .from('mattrack_matches')
-      .select('id, red_name, green_name, event_name, video_id, mattrack_videos(filename)')
-      .order('created_at', { ascending: false })
-      .limit(10)
-      .then(({ data }) => setRecentMatches((data || []) as unknown as ExistingMatch[]))
+      .rpc('get_matches_with_signal_count')
+      .then(({ data, error }) => {
+        if (error) {
+          // fallback to simple query if RPC not available
+          supabase
+            .from('mattrack_matches')
+            .select('id, red_name, green_name, event_name, video_id, status, mattrack_videos(filename)')
+            .order('created_at', { ascending: false })
+            .limit(20)
+            .then(({ data }) => setRecentMatches((data || []) as unknown as ExistingMatch[]))
+        } else {
+          setRecentMatches((data || []) as unknown as ExistingMatch[])
+        }
+      })
   }, [])
 
   const endSession = async () => {
@@ -234,11 +245,7 @@ export default function LabelerApp() {
     setVideoName(file.name)
     setSavedLabels([])
     // check for existing matches with this filename
-    const { data } = await supabase
-      .from('mattrack_matches')
-      .select('id, red_name, green_name, event_name, video_id, mattrack_videos(filename)')
-      .order('created_at', { ascending: false })
-      .limit(20)
+    const { data } = await supabase.rpc('get_matches_with_signal_count')
     const matches = (data || []) as unknown as ExistingMatch[]
     const matching = matches.filter(m => m.mattrack_videos?.filename === file.name)
     setExistingMatches(matching)
@@ -470,33 +477,68 @@ export default function LabelerApp() {
 
       {/* ── HOME SCREEN ─────────────────────────────────── */}
       {step === 'home' && (
-        <div style={{ flex: 1, padding: 24, display: 'flex', flexDirection: 'column', gap: 20 }}>
-          <div style={{ fontSize: 11, color: '#666', letterSpacing: 2 }}>RECENT MATCHES</div>
+        <div style={{ flex: 1, padding: 20, display: 'flex', flexDirection: 'column', gap: 12, overflowY: 'auto' }}>
+          <div style={{ fontSize: 11, color: '#666', letterSpacing: 2, marginBottom: 4 }}>RECENT MATCHES</div>
           {recentMatches.length === 0 && (
-            <div style={{ color: '#333', fontSize: 12 }}>No sessions yet — load a video to begin</div>
+            <div style={{ color: '#333', fontSize: 12, padding: '20px 0' }}>No sessions yet — start a new session below</div>
           )}
           {recentMatches.map(m => (
-            <button key={m.id} onClick={async () => {
-              setExistingMatches([m])
-              // Need file — prompt user
-              setExistingMatches([m])
-              showToast('Load the video file to resume this match')
-              fileInputRef.current?.click()
-            }} style={{
-              background: '#0d0d1a', border: '1px solid #1a1a2e', color: '#e0e0f0',
-              padding: '14px 16px', cursor: 'pointer', fontFamily: 'inherit',
-              textAlign: 'left', display: 'flex', flexDirection: 'column', gap: 4,
-            }}>
-              <div style={{ fontSize: 13, fontWeight: 'bold' }}>
-                {m.red_name} vs {m.green_name}
+            <div key={m.id} style={{ background: '#0d0d1a', border: `1px solid ${m.status === 'complete' ? '#00ff88' : '#1a1a2e'}`, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {/* Match info */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 'bold', color: '#e0e0f0' }}>
+                    {m.red_name} vs {m.green_name}
+                  </div>
+                  <div style={{ fontSize: 10, color: '#555', marginTop: 2, display: 'flex', gap: 10 }}>
+                    {m.event_name && <span>{m.event_name}</span>}
+                    <span>{m.mattrack_videos?.filename}</span>
+                  </div>
+                </div>
+                <div style={{ textAlign: 'right' }}>
+                  <div style={{ fontSize: 18, fontWeight: 'bold', color: m.signal_count > 0 ? '#00ff88' : '#333' }}>
+                    {m.signal_count || 0}
+                  </div>
+                  <div style={{ fontSize: 9, color: '#444' }}>LABELS</div>
+                </div>
               </div>
-              <div style={{ fontSize: 10, color: '#555', display: 'flex', gap: 12 }}>
-                {m.event_name && <span>{m.event_name}</span>}
-                <span>{m.mattrack_videos?.filename}</span>
+              {/* Status badge */}
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <span style={{ fontSize: 9, padding: '2px 8px', border: `1px solid ${m.status === 'complete' ? '#00ff88' : '#333'}`, color: m.status === 'complete' ? '#00ff88' : '#555', letterSpacing: 1 }}>
+                  {(m.status || 'in_progress').toUpperCase().replace('_', ' ')}
+                </span>
               </div>
-            </button>
+              {/* Action buttons */}
+              <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+                <button onClick={async () => {
+                  setExistingMatches([m])
+                  setStep('resume_or_new')
+                  showToast('Load the video file to resume')
+                  setTimeout(() => fileInputRef.current?.click(), 300)
+                }} style={{ flex: 2, background: '#1a1a2e', border: '1px solid #333', color: '#aaa', padding: '8px 0', cursor: 'pointer', fontFamily: 'inherit', fontSize: 11, letterSpacing: 1 }}>
+                  ▶ RESUME
+                </button>
+                <button onClick={async () => {
+                  const newStatus = m.status === 'complete' ? 'in_progress' : 'complete'
+                  await supabase.from('mattrack_matches').update({ status: newStatus }).eq('id', m.id)
+                  setRecentMatches(prev => prev.map(r => r.id === m.id ? { ...r, status: newStatus } : r))
+                  showToast(newStatus === 'complete' ? 'Marked complete ✓' : 'Reopened')
+                }} style={{ flex: 1, background: m.status === 'complete' ? '#0d2e0d' : 'transparent', border: `1px solid ${m.status === 'complete' ? '#00ff88' : '#333'}`, color: m.status === 'complete' ? '#00ff88' : '#555', padding: '8px 0', cursor: 'pointer', fontFamily: 'inherit', fontSize: 10, letterSpacing: 1 }}>
+                  {m.status === 'complete' ? '✓ DONE' : 'COMPLETE'}
+                </button>
+                <button onClick={async () => {
+                  if (!confirm('Delete this match and all its labels?')) return
+                  await supabase.from('mattrack_signal_instances').delete().eq('match_id', m.id)
+                  await supabase.from('mattrack_matches').delete().eq('id', m.id)
+                  setRecentMatches(prev => prev.filter(r => r.id !== m.id))
+                  showToast('Match deleted')
+                }} style={{ flex: 1, background: 'transparent', border: '1px solid #333', color: '#f87171', padding: '8px 0', cursor: 'pointer', fontFamily: 'inherit', fontSize: 10, letterSpacing: 1 }}>
+                  DELETE
+                </button>
+              </div>
+            </div>
           ))}
-          <button onClick={() => { setStep('video'); fileInputRef.current?.click() }} style={{
+          <button onClick={() => { setStep('video'); setTimeout(() => fileInputRef.current?.click(), 100) }} style={{
             background: '#ff0055', border: 'none', color: '#fff', padding: '14px 0',
             cursor: 'pointer', fontFamily: 'inherit', fontSize: 13,
             letterSpacing: 2, fontWeight: 'bold', marginTop: 8,

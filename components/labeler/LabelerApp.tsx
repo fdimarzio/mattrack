@@ -170,24 +170,23 @@ export default function LabelerApp() {
     setTimeout(() => setToast(null), 3500)
   }
 
+  const loadRecentMatches = async () => {
+    const { data, error } = await supabase.rpc('get_matches_with_signal_count')
+    if (error || !data) {
+      // fallback
+      const { data: d2 } = await supabase
+        .from('mattrack_matches')
+        .select('id, red_name, green_name, event_name, video_id, status, mattrack_videos(filename)')
+        .order('created_at', { ascending: false })
+        .limit(20)
+      setRecentMatches((d2 || []) as unknown as ExistingMatch[])
+    } else {
+      setRecentMatches(data as unknown as ExistingMatch[])
+    }
+  }
+
   // Load recent matches on mount
-  useEffect(() => {
-    supabase
-      .rpc('get_matches_with_signal_count')
-      .then(({ data, error }) => {
-        if (error) {
-          // fallback to simple query if RPC not available
-          supabase
-            .from('mattrack_matches')
-            .select('id, red_name, green_name, event_name, video_id, status, mattrack_videos(filename)')
-            .order('created_at', { ascending: false })
-            .limit(20)
-            .then(({ data }) => setRecentMatches((data || []) as unknown as ExistingMatch[]))
-        } else {
-          setRecentMatches((data || []) as unknown as ExistingMatch[])
-        }
-      })
-  }, [])
+  useEffect(() => { loadRecentMatches() }, [])
 
   const endSession = async () => {
     if (sessionId) {
@@ -340,9 +339,10 @@ export default function LabelerApp() {
       // Skip bbox on mobile (touch device) — go straight to whistle
       const isMobile = window.matchMedia('(max-width: 768px)').matches || navigator.maxTouchPoints > 0
       if (isMobile) {
-        setStep('whistle')
+        // Skip bbox and whistle on mobile — whistle reviewed separately on desktop
+        setStep('meta')
         setMobileTab('signals')
-        showToast('End marked — confirm whistle')
+        showToast('End marked — set quality and save')
       } else {
         setStep('bbox')
         showToast('End marked — drag to draw box around ref (or skip)')
@@ -413,6 +413,11 @@ export default function LabelerApp() {
       whistle_source_method: hasWhistle ? whistleMethod : null,
       ambient_whistle_count_nearby: ambientWhistleCount,
       label_confidence: confidence,
+      // Whistle confirmation deferred to desktop review pass
+      has_whistle: false,
+      whistle_source_confirmed: false,
+      whistle_source_method: pendingSignal.hasWhistle ? 'ambiguous' : null,
+      needs_review: isAmbiguous || confidence < 2 || (pendingSignal.hasWhistle || false),
       is_occluded: isOccluded,
       is_ambiguous: isAmbiguous, needs_review: isAmbiguous || confidence < 2,
       review_notes: reviewNotes || null,
@@ -591,7 +596,11 @@ export default function LabelerApp() {
               <div style={{ background: 'rgba(255,0,85,0.95)', color: '#fff', padding: '6px 16px', fontSize: 12, fontWeight: 'bold' }}>
                 DRAG TO BOX THE REF
               </div>
-              <button onClick={() => { setStep('whistle'); setMobileTab('signals') }}
+              <button onClick={() => {
+                const isMob = navigator.maxTouchPoints > 0
+                setStep(isMob ? 'meta' : 'whistle')
+                setMobileTab('signals')
+              }}
                 style={{ background: 'rgba(0,0,0,0.85)', border: '1px solid #555', color: '#aaa', padding: '6px 20px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 11, letterSpacing: 1 }}>
                 SKIP BBOX →
               </button>

@@ -1,4 +1,4 @@
-export type SignalCategory = 'scoring' | 'control' | 'violation' | 'time' | 'outcome'
+export type SignalCategory = 'scoring' | 'control' | 'clock' | 'violation' | 'time' | 'outcome'
 
 export interface Signal {
   id: string
@@ -198,6 +198,70 @@ export const SIGNALS: Signal[] = [
     notes: 'Green near fall 4pt — ref arm parallel to mat then 4 fingers',
   },
 
+
+  // ── MATCH CLOCK EVENTS ────────────────────────────────────
+  // These affect the clock and mark match boundaries
+  {
+    id: 'handshake_start',
+    label: 'Handshake / Match Start',
+    points: 0, category: 'clock', color: '#38bdf8',
+    hasWhistle: true,
+    notes: 'Ref brings wrestlers together, handshake, whistle to start clock',
+  },
+  {
+    id: 'clock_start',
+    label: 'Clock Start',
+    points: 0, category: 'clock', color: '#38bdf8',
+    hasWhistle: true,
+    notes: 'Ref starts match clock — whistle + point down',
+  },
+  {
+    id: 'clock_stop',
+    label: 'Clock Stop',
+    points: 0, category: 'clock', color: '#38bdf8',
+    hasWhistle: true,
+    notes: 'Ref stops match clock — whistle + stop signal',
+  },
+  {
+    id: 'period_end',
+    label: 'End of Period',
+    points: 0, category: 'clock', color: '#38bdf8',
+    hasWhistle: true,
+    notes: 'Horn/whistle signals end of period',
+  },
+  {
+    id: 'match_end_decision',
+    label: 'Match End — Decision',
+    points: 0, category: 'clock', color: '#38bdf8',
+    hasWhistle: true,
+    notes: 'Final whistle — match ends by decision',
+  },
+  {
+    id: 'match_end_handshake',
+    label: 'Post-Match Handshake',
+    points: 0, category: 'clock', color: '#38bdf8',
+    notes: 'Wrestlers shake hands after match — marks definitive match end',
+  },
+  {
+    id: 'injury_clock_start_red',
+    label: 'Injury Clock Start — Red',
+    points: 0, category: 'clock', color: '#38bdf8',
+    requiresWrestler: true,
+    notes: 'Injury clock starts for red — ref circles finger, match clock stops',
+  },
+  {
+    id: 'injury_clock_start_green',
+    label: 'Injury Clock Start — Green',
+    points: 0, category: 'clock', color: '#38bdf8',
+    requiresWrestler: true,
+    notes: 'Injury clock starts for green — ref circles finger, match clock stops',
+  },
+  {
+    id: 'injury_clock_stop',
+    label: 'Injury/Blood Clock Stop',
+    points: 0, category: 'clock', color: '#38bdf8',
+    notes: 'Ref crosses wrists — injury/blood clock stops, match clock resumes',
+  },
   // ── TIME EVENTS ────────────────────────────────────────────
   {
     id: 'start_injury_time_red',
@@ -412,6 +476,7 @@ export const SIGNAL_MAP = Object.fromEntries(SIGNALS.map(s => [s.id, s]))
 export const CATEGORY_COLOR: Record<SignalCategory, string> = {
   scoring:   '#00ff88',
   control:   '#a78bfa',
+  clock:     '#38bdf8',
   violation: '#f87171',
   time:      '#fb923c',
   outcome:   '#ff0055',
@@ -420,6 +485,7 @@ export const CATEGORY_COLOR: Record<SignalCategory, string> = {
 export const SIGNAL_GROUPS: Record<string, Signal[]> = {
   '🔴 RED SCORING':       SIGNALS.filter(s => s.category === 'scoring' && s.id.endsWith('_red')),
   '🟢 GREEN SCORING':     SIGNALS.filter(s => s.category === 'scoring' && s.id.endsWith('_green')),
+  '⏱️ CLOCK EVENTS':       SIGNALS.filter(s => s.category === 'clock'),
   '🎮 MATCH CONTROL':     SIGNALS.filter(s => s.category === 'control'),
   '⏱ TIME EVENTS':        SIGNALS.filter(s => s.category === 'time'),
   '⚠️ VIOLATIONS':        SIGNALS.filter(s => s.category === 'violation'),

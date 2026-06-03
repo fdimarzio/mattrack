@@ -109,9 +109,17 @@ export default function LabelerApp() {
   const [videoId, setVideoId] = useState<string | null>(null)
   const [matchId, setMatchId] = useState<string | null>(null)
   const [sessionId, setSessionId] = useState<string | null>(null)
-  const [matchData, setMatchData] = useState<MatchData>({
-    red_name: 'Wrestler A', green_name: 'Wrestler B',
-    weight_class: '', event_name: '', total_periods: 3,
+  const [matchData, setMatchData] = useState<MatchData>(() => {
+    // Load persisted wrestler names from localStorage
+    const saved = typeof window !== 'undefined' ? localStorage.getItem('mattrack_defaults') : null
+    const defaults = saved ? JSON.parse(saved) : {}
+    return {
+      red_name: defaults.red_name || 'Wrestler A',
+      green_name: defaults.green_name || 'Wrestler B',
+      weight_class: defaults.weight_class || '',
+      event_name: '',
+      total_periods: 3,
+    }
   })
   const [existingMatches, setExistingMatches] = useState<ExistingMatch[]>([])
   const [recentMatches, setRecentMatches] = useState<ExistingMatch[]>([])
@@ -538,7 +546,12 @@ export default function LabelerApp() {
               </div>
             </div>
           ))}
-          <button onClick={() => { setStep('video'); setTimeout(() => fileInputRef.current?.click(), 100) }} style={{
+          <button onClick={() => {
+            setVideoSrc(null); setVideoId(null); setMatchId(null); setSessionId(null)
+            setSavedLabels([]); setTotalLabels(0); setCurrentMatchName(''); setPendingSignal(null)
+            setStep('video')
+            setTimeout(() => fileInputRef.current?.click(), 100)
+          }} style={{
             background: '#ff0055', border: 'none', color: '#fff', padding: '14px 0',
             cursor: 'pointer', fontFamily: 'inherit', fontSize: 13,
             letterSpacing: 2, fontWeight: 'bold', marginTop: 8,
@@ -679,9 +692,34 @@ export default function LabelerApp() {
         {step === 'match' && (
           <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 8 }}>
             <div style={{ fontSize: 11, color: '#666', letterSpacing: 2, marginBottom: 4 }}>STEP 2 — MATCH METADATA</div>
-            <Row label="Red Wrestler"><input value={matchData.red_name} onChange={e => setMatchData(p => ({ ...p, red_name: e.target.value }))} style={inputStyle} /></Row>
-            <Row label="Green Wrestler"><input value={matchData.green_name} onChange={e => setMatchData(p => ({ ...p, green_name: e.target.value }))} style={inputStyle} /></Row>
-            <Row label="Weight Class"><input value={matchData.weight_class} onChange={e => setMatchData(p => ({ ...p, weight_class: e.target.value }))} style={{ ...inputStyle, width: '100%' }} placeholder="e.g. 157" /></Row>
+            <div style={{ fontSize: 10, color: '#444', marginBottom: 4 }}>Names are saved as defaults for future matches</div>
+            <Row label="Red Wrestler">
+              <input value={matchData.red_name}
+                onChange={e => {
+                  setMatchData(p => ({ ...p, red_name: e.target.value }))
+                  const saved = localStorage.getItem('mattrack_defaults')
+                  const d = saved ? JSON.parse(saved) : {}
+                  localStorage.setItem('mattrack_defaults', JSON.stringify({ ...d, red_name: e.target.value }))
+                }} style={inputStyle} placeholder="e.g. Frank DiMarzio" />
+            </Row>
+            <Row label="Green Wrestler">
+              <input value={matchData.green_name}
+                onChange={e => {
+                  setMatchData(p => ({ ...p, green_name: e.target.value }))
+                  const saved = localStorage.getItem('mattrack_defaults')
+                  const d = saved ? JSON.parse(saved) : {}
+                  localStorage.setItem('mattrack_defaults', JSON.stringify({ ...d, green_name: e.target.value }))
+                }} style={inputStyle} placeholder="Opponent name" />
+            </Row>
+            <Row label="Weight Class">
+              <input value={matchData.weight_class}
+                onChange={e => {
+                  setMatchData(p => ({ ...p, weight_class: e.target.value }))
+                  const saved = localStorage.getItem('mattrack_defaults')
+                  const d = saved ? JSON.parse(saved) : {}
+                  localStorage.setItem('mattrack_defaults', JSON.stringify({ ...d, weight_class: e.target.value }))
+                }} style={{ ...inputStyle, width: '100%' }} placeholder="e.g. 157" />
+            </Row>
             <Row label="Event Name"><input value={matchData.event_name} onChange={e => setMatchData(p => ({ ...p, event_name: e.target.value }))} style={inputStyle} /></Row>
             <Row label="Periods"><Sel value={matchData.total_periods} onChange={v => setMatchData(p => ({ ...p, total_periods: +v }))} opts={[2, 3]} /></Row>
             <button onClick={saveMatchRecord} style={{ ...primaryBtn, marginTop: 8 }}>START LABELING →</button>

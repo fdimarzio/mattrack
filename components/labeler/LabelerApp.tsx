@@ -293,8 +293,16 @@ export default function LabelerApp() {
       showToast('Peak marked at F' + f + ' — now mark END frame')
     } else {
       setEndFrame(f)
-      setStep('bbox')
-      showToast('End marked — draw box around ref')
+      // Skip bbox on mobile (touch device) — go straight to whistle
+      const isMobile = window.matchMedia('(max-width: 768px)').matches || navigator.maxTouchPoints > 0
+      if (isMobile) {
+        setStep('whistle')
+        setMobileTab('signals')
+        showToast('End marked — confirm whistle')
+      } else {
+        setStep('bbox')
+        showToast('End marked — drag to draw box around ref (or skip)')
+      }
     }
   }
 
@@ -314,6 +322,29 @@ export default function LabelerApp() {
   const onMouseUp = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!drawing || !drawStart) return
     const c = canvasCoords(e)
+    const x = Math.min(drawStart.x, c.x), y = Math.min(drawStart.y, c.y)
+    const w = Math.abs(c.x - drawStart.x), h = Math.abs(c.y - drawStart.y)
+    if (w > 0.01 && h > 0.01) { setBbox({ x, y, w, h }); setStep('whistle'); setMobileTab('signals') }
+    setDrawing(false)
+  }
+
+  // Touch handlers for mobile bbox drawing
+  const onTouchStart = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    if (step !== 'bbox') return
+    e.preventDefault()
+    setDrawing(true); const c = canvasCoords(e); setDrawStart(c); setDrawCurrent(c)
+  }
+  const onTouchMove = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    if (!drawing) return
+    e.preventDefault()
+    setDrawCurrent(canvasCoords(e))
+  }
+  const onTouchEnd = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    if (!drawing || !drawStart) return
+    const canvas = canvasRef.current!
+    const rect = canvas.getBoundingClientRect()
+    const touch = e.changedTouches[0]
+    const c = { x: (touch.clientX - rect.left) / rect.width, y: (touch.clientY - rect.top) / rect.height }
     const x = Math.min(drawStart.x, c.x), y = Math.min(drawStart.y, c.y)
     const w = Math.abs(c.x - drawStart.x), h = Math.abs(c.y - drawStart.y)
     if (w > 0.01 && h > 0.01) { setBbox({ x, y, w, h }); setStep('whistle'); setMobileTab('signals') }
@@ -413,7 +444,8 @@ export default function LabelerApp() {
                 onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} />
               <canvas ref={canvasRef} width={1280} height={720}
                 style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', cursor: step === 'bbox' ? 'crosshair' : 'default' }}
-                onMouseDown={onMouseDown} onMouseMove={onMouseMove} onMouseUp={onMouseUp} />
+                onMouseDown={onMouseDown} onMouseMove={onMouseMove} onMouseUp={onMouseUp}
+                onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd} />
             </>
           ) : (
             <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 16, minHeight: 200 }}>
@@ -428,8 +460,14 @@ export default function LabelerApp() {
             </div>
           )}
           {step === 'bbox' && (
-            <div style={{ position: 'absolute', bottom: 8, left: '50%', transform: 'translateX(-50%)', background: 'rgba(255,0,85,0.95)', color: '#fff', padding: '6px 16px', fontSize: 12, fontWeight: 'bold', whiteSpace: 'nowrap' }}>
-              DRAW BOX AROUND REF
+            <div style={{ position: 'absolute', bottom: 8, left: 8, right: 8, display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'center' }}>
+              <div style={{ background: 'rgba(255,0,85,0.95)', color: '#fff', padding: '6px 16px', fontSize: 12, fontWeight: 'bold' }}>
+                DRAG TO BOX THE REF
+              </div>
+              <button onClick={() => { setStep('whistle'); setMobileTab('signals') }}
+                style={{ background: 'rgba(0,0,0,0.85)', border: '1px solid #555', color: '#aaa', padding: '6px 20px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 11, letterSpacing: 1 }}>
+                SKIP BBOX →
+              </button>
             </div>
           )}
         </div>

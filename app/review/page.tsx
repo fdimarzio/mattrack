@@ -88,10 +88,11 @@ export default function ReviewPage() {
       ctx.setLineDash([])
     }
     // Draw bbox for active detection
-    if (activeDetection?.bbox_x) {
-      const { bbox_x: bx, bbox_y: by, bbox_w: bw, bbox_h: bh } = activeDetection
+    if (activeDetection?.bbox_x != null && activeDetection.bbox_y != null && activeDetection.bbox_w != null && activeDetection.bbox_h != null) {
+      const bx = activeDetection.bbox_x, by = activeDetection.bbox_y
+      const bw = activeDetection.bbox_w, bh = activeDetection.bbox_h
       ctx.strokeStyle = '#00ff88'; ctx.lineWidth = 2
-      ctx.strokeRect(bx * canvas.width, by * canvas.height, bw! * canvas.width, bh! * canvas.height)
+      ctx.strokeRect(bx * canvas.width, by * canvas.height, bw * canvas.width, bh * canvas.height)
       ctx.fillStyle = '#00ff88'; ctx.font = '12px monospace'
       ctx.fillText('REF', bx * canvas.width + 4, by * canvas.height + 14)
     }

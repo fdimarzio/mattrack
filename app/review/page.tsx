@@ -45,6 +45,7 @@ const runMockInference = (duration: number, fps: number): Detection[] => {
 
 export default function ReviewPage() {
   const videoRef = useRef<HTMLVideoElement>(null)
+  const canvasRef = useRef<HTMLCanvasElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [videoSrc, setVideoSrc] = useState<string | null>(null)
   const [videoName, setVideoName] = useState('')
@@ -62,10 +63,68 @@ export default function ReviewPage() {
   const [showExisting, setShowExisting] = useState(true)
   const [showPending, setShowPending] = useState(true)
   const [toast, setToast] = useState<{ msg: string; type: string } | null>(null)
+  const [bboxMode, setBboxMode] = useState(false)
+  const [bboxDrawStart, setBboxDrawStart] = useState<{x:number,y:number}|null>(null)
+  const [bboxDrawCurrent, setBboxDrawCurrent] = useState<{x:number,y:number}|null>(null)
+  const [bboxDrawing, setBboxDrawing] = useState(false)
   const [whistleReviewMode, setWhistleReviewMode] = useState(false)
   const [pendingWhistleIdx, setPendingWhistleIdx] = useState(0)
 
   const showToast = (msg: string, type = 'ok') => { setToast({ msg, type }); setTimeout(() => setToast(null), 3000) }
+
+  // Draw bbox overlay on canvas
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const ctx = canvas.getContext('2d')!
+    ctx.clearRect(0, 0, canvas.width, canvas.height)
+    if (bboxDrawing && bboxDrawStart && bboxDrawCurrent) {
+      const x = Math.min(bboxDrawStart.x, bboxDrawCurrent.x)
+      const y = Math.min(bboxDrawStart.y, bboxDrawCurrent.y)
+      const w = Math.abs(bboxDrawCurrent.x - bboxDrawStart.x)
+      const h = Math.abs(bboxDrawCurrent.y - bboxDrawStart.y)
+      ctx.strokeStyle = '#ff0055'; ctx.lineWidth = 2; ctx.setLineDash([4,4])
+      ctx.strokeRect(x * canvas.width, y * canvas.height, w * canvas.width, h * canvas.height)
+      ctx.setLineDash([])
+    }
+    // Draw bbox for active detection
+    if (activeDetection?.bbox_x) {
+      const { bbox_x: bx, bbox_y: by, bbox_w: bw, bbox_h: bh } = activeDetection
+      ctx.strokeStyle = '#00ff88'; ctx.lineWidth = 2
+      ctx.strokeRect(bx * canvas.width, by * canvas.height, bw! * canvas.width, bh! * canvas.height)
+      ctx.fillStyle = '#00ff88'; ctx.font = '12px monospace'
+      ctx.fillText('REF', bx * canvas.width + 4, by * canvas.height + 14)
+    }
+  }, [bboxDrawing, bboxDrawStart, bboxDrawCurrent, activeDetection])
+
+  const canvasBboxCoords = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current!
+    const rect = canvas.getBoundingClientRect()
+    return { x: (e.clientX - rect.left) / rect.width, y: (e.clientY - rect.top) / rect.height }
+  }
+  const onBboxMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    setBboxDrawing(true); const c = canvasBboxCoords(e); setBboxDrawStart(c); setBboxDrawCurrent(c)
+  }
+  const onBboxMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!bboxDrawing) return; setBboxDrawCurrent(canvasBboxCoords(e))
+  }
+  const onBboxMouseUp = async (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!bboxDrawing || !bboxDrawStart || !activeDetection?.db_id) return
+    const c = canvasBboxCoords(e)
+    const x = Math.min(bboxDrawStart.x, c.x), y = Math.min(bboxDrawStart.y, c.y)
+    const w = Math.abs(c.x - bboxDrawStart.x), h = Math.abs(c.y - bboxDrawStart.y)
+    if (w > 0.02 && h > 0.02) {
+      await supabase.from('mattrack_signal_instances')
+        .update({ bbox_x: x, bbox_y: y, bbox_w: w, bbox_h: h })
+        .eq('id', activeDetection.db_id)
+      setExistingLabels(prev => prev.map(l =>
+        l.db_id === activeDetection.db_id ? { ...l, bbox_x: x, bbox_y: y, bbox_w: w, bbox_h: h } : l
+      ))
+      showToast('Bbox saved ✓')
+      setBboxMode(false)
+    }
+    setBboxDrawing(false)
+  }
 
   useEffect(() => {
     const video = videoRef.current; if (!video) return
@@ -239,13 +298,23 @@ export default function ReviewPage() {
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
 
         {/* Left: video */}
-        <div style={{ flex: '0 0 60%', display: 'flex', flexDirection: 'column', borderRight: '1px solid #1a1a2e' }}>
+        <div style={{ flex: '0 0 45%', display: 'flex', flexDirection: 'column', borderRight: '1px solid #1a1a2e' }}>
 
           <div style={{ position: 'relative', background: '#000', aspectRatio: '16/9' }}>
             {videoSrc ? (
-              <video ref={videoRef} src={videoSrc} style={{ width: '100%', height: '100%', display: 'block' }}
-                onLoadedMetadata={() => setDuration(videoRef.current?.duration || 0)}
-                onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} />
+              <>
+                <video ref={videoRef} src={videoSrc} style={{ width: '100%', height: '100%', display: 'block' }}
+                  onLoadedMetadata={() => setDuration(videoRef.current?.duration || 0)}
+                  onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} />
+                <canvas ref={canvasRef} width={1280} height={720}
+                  style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', cursor: bboxMode ? 'crosshair' : 'default', pointerEvents: bboxMode ? 'auto' : 'none' }}
+                  onMouseDown={onBboxMouseDown} onMouseMove={onBboxMouseMove} onMouseUp={onBboxMouseUp} />
+                {bboxMode && (
+                  <div style={{ position: 'absolute', top: 8, right: 8, background: 'rgba(255,0,85,0.9)', color: '#fff', padding: '4px 12px', fontSize: 11, fontWeight: 'bold' }}>
+                    DRAW BOX AROUND REF — drag mouse
+                  </div>
+                )}
+              </>
             ) : (
               <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 16 }}>
                 <div style={{ fontSize: 36, opacity: 0.2 }}>🎬</div>
@@ -368,7 +437,7 @@ export default function ReviewPage() {
               <div style={{ fontSize: 10, color: '#555', marginBottom: 12 }}>
                 F{currentWhistleLabel.start_frame} → F{currentWhistleLabel.end_frame} · Listen carefully — did the whistle come from THIS mat?
               </div>
-              <button onClick={() => jumpTo(currentWhistleLabel)} style={{ ...btn, marginBottom: 12, width: '100%' }}>
+              <button onClick={() => { jumpTo(currentWhistleLabel); }} style={{ ...btn, marginBottom: 12, width: '100%' }}>
                 ▶ JUMP TO THIS LABEL
               </button>
               <div style={{ display: 'flex', gap: 8 }}>
@@ -419,12 +488,17 @@ export default function ReviewPage() {
                     {d.status === 'rejected' && <span style={{ color: '#f87171', fontSize: 9 }}>✗</span>}
                   </div>
                 </div>
-                {d.source === 'model' && d.status === 'pending' && (
-                  <div style={{ display: 'flex', gap: 4 }}>
+                <div style={{ display: 'flex', gap: 4 }}>
+                  {d.source === 'model' && d.status === 'pending' && <>
                     <button onClick={e => { e.stopPropagation(); acceptDetection(d.id) }} style={{ background: 'transparent', border: '1px solid #00ff88', color: '#00ff88', padding: '2px 8px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 10 }}>✓</button>
                     <button onClick={e => { e.stopPropagation(); rejectDetection(d.id) }} style={{ background: 'transparent', border: '1px solid #f87171', color: '#f87171', padding: '2px 8px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 10 }}>✗</button>
-                  </div>
-                )}
+                  </>}
+                  {d.source === 'human' && !d.bbox_x && (
+                    <button onClick={e => { e.stopPropagation(); jumpTo(d); setBboxMode(true) }}
+                      style={{ background: 'transparent', border: '1px solid #a78bfa', color: '#a78bfa', padding: '2px 8px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 9 }}>+ BBOX</button>
+                  )}
+                  {d.bbox_x && <span style={{ fontSize: 9, color: '#00ff88' }}>□</span>}
+                </div>
               </div>
             ))}
           </div>

@@ -121,6 +121,7 @@ export default function LabelerApp() {
       total_periods: 3,
     }
   })
+  const [knownWrestlers, setKnownWrestlers] = useState<string[]>([])
   const [existingMatches, setExistingMatches] = useState<ExistingMatch[]>([])
   const [recentMatches, setRecentMatches] = useState<ExistingMatch[]>([])
   const [currentMatchName, setCurrentMatchName] = useState('')
@@ -139,7 +140,7 @@ export default function LabelerApp() {
 
   const [wrestler, setWrestler] = useState<'red' | 'green'>('red')
   const [period, setPeriod] = useState(1)
-  const [confidence, setConfidence] = useState(3)
+  const [confidence, setConfidence] = useState(5)
   const [isNegative, setIsNegative] = useState(false)
   const [isOccluded, setIsOccluded] = useState(false)
   const [isAmbiguous, setIsAmbiguous] = useState(false)
@@ -187,8 +188,22 @@ export default function LabelerApp() {
     }
   }
 
-  // Load recent matches on mount
-  useEffect(() => { loadRecentMatches() }, [])
+  // Load recent matches and known wrestler names on mount
+  useEffect(() => {
+    loadRecentMatches()
+    // Pull all unique wrestler names for autocomplete
+    supabase.from('mattrack_matches')
+      .select('red_name, green_name')
+      .then(({ data }) => {
+        if (!data) return
+        const names = new Set<string>()
+        data.forEach((m: { red_name: string; green_name: string }) => {
+          if (m.red_name && m.red_name !== 'Wrestler A') names.add(m.red_name.trim())
+          if (m.green_name && m.green_name !== 'Wrestler B') names.add(m.green_name.trim())
+        })
+        setKnownWrestlers(Array.from(names).sort())
+      })
+  }, [])
 
   const endSession = async () => {
     if (sessionId) {
@@ -283,8 +298,18 @@ export default function LabelerApp() {
 
   const saveVideoRecord = async () => {
     const vid = videoRef.current
+    // Check for duplicate filename — append timestamp if exists
+    const { data: existing } = await supabase
+      .from('mattrack_videos')
+      .select('id')
+      .eq('filename', videoName)
+      .limit(1)
+    const ts = new Date().toISOString().slice(0,19).replace('T',' ')
+    const uniqueName = existing && existing.length > 0
+      ? videoName.replace(/(\.\w+)$/, ` (${ts})$1`)
+      : videoName
     const { data, error } = await supabase.from('mattrack_videos').insert({
-      filename: videoName, duration_seconds: vid?.duration || 0, fps,
+      filename: uniqueName, duration_seconds: vid?.duration || 0, fps,
       width_px: vid?.videoWidth, height_px: vid?.videoHeight,
       camera_angle: cameraAngle, venue_type: venueType,
       ambient_whistle_density: ambientDensity, estimated_mat_count: matCount,
@@ -293,7 +318,8 @@ export default function LabelerApp() {
     setVideoId(data.id)
     setDuration(vid?.duration || 0)
     setStep('match')
-    showToast('Video registered ✓')
+    if (uniqueName !== videoName) showToast('Duplicate filename — timestamped ✓')
+    else showToast('Video registered ✓')
   }
 
   const saveMatchRecord = async () => {
@@ -322,7 +348,7 @@ export default function LabelerApp() {
     setWhistleSourceConfirmed(false); setWhistleMethod('ambiguous')
     setAmbientWhistleCount(0); setWhistleConfidence(0.5)
     setIsNegative(false); setIsOccluded(false); setIsAmbiguous(false)
-    setConfidence(3); setReviewNotes('')
+    setConfidence(5); setReviewNotes('')
     setStep('mark_frames')
     setMobileTab('video')
     showToast(`Marking: ${sig.label} — scrub to START of gesture`)
@@ -701,23 +727,27 @@ export default function LabelerApp() {
           <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 8 }}>
             <div style={{ fontSize: 11, color: '#666', letterSpacing: 2, marginBottom: 4 }}>STEP 2 — MATCH METADATA</div>
             <div style={{ fontSize: 10, color: '#444', marginBottom: 4 }}>Names are saved as defaults for future matches</div>
+            {/* datalist provides autocomplete from past wrestler names */}
+            <datalist id="wrestler-names">
+              {knownWrestlers.map(n => <option key={n} value={n} />)}
+            </datalist>
             <Row label="Red Wrestler">
-              <input value={matchData.red_name}
+              <input list="wrestler-names" value={matchData.red_name}
                 onChange={e => {
                   setMatchData(p => ({ ...p, red_name: e.target.value }))
                   const saved = localStorage.getItem('mattrack_defaults')
                   const d = saved ? JSON.parse(saved) : {}
                   localStorage.setItem('mattrack_defaults', JSON.stringify({ ...d, red_name: e.target.value }))
-                }} style={inputStyle} placeholder="e.g. Frank DiMarzio" />
+                }} style={inputStyle} placeholder="e.g. Frank DiMarzio" autoComplete="off" />
             </Row>
             <Row label="Green Wrestler">
-              <input value={matchData.green_name}
+              <input list="wrestler-names" value={matchData.green_name}
                 onChange={e => {
                   setMatchData(p => ({ ...p, green_name: e.target.value }))
                   const saved = localStorage.getItem('mattrack_defaults')
                   const d = saved ? JSON.parse(saved) : {}
                   localStorage.setItem('mattrack_defaults', JSON.stringify({ ...d, green_name: e.target.value }))
-                }} style={inputStyle} placeholder="Opponent name" />
+                }} style={inputStyle} placeholder="Opponent name" autoComplete="off" />
             </Row>
             <Row label="Weight Class">
               <input value={matchData.weight_class}

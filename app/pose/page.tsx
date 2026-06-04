@@ -435,7 +435,7 @@ export default function PosePage() {
 
       {toast && <div style={{ position:'fixed', top:16, left:'50%', transform:'translateX(-50%)', background:'#00ff88', color:'#000', padding:'10px 20px', fontFamily:'inherit', fontSize:12, fontWeight:'bold', zIndex:999, maxWidth:'90vw', textAlign:'center' }}>{toast}</div>}
 
-      <video ref={videoRef} src={videoSrc||undefined} style={{ display:'none' }} preload="auto" />
+
       <input ref={fileInputRef} type="file" accept="video/*" onChange={handleFile} style={{ display:'none' }} />
 
       <div style={{ display:'flex', flex:1, overflow:'hidden' }}>
@@ -443,13 +443,25 @@ export default function PosePage() {
         {/* Left */}
         <div style={{ flex:'0 0 42%', display:'flex', flexDirection:'column', borderRight:'1px solid #1a1a2e', overflow:'hidden' }}>
           <div style={{ position:'relative', background:'#000', aspectRatio:'16/9', flexShrink:0 }}>
-            {fileLoaded
-              ? <canvas ref={canvasRef} style={{ width:'100%', height:'100%', display:'block' }} />
-              : <div style={{ width:'100%', height:'100%', display:'flex', alignItems:'center', justifyContent:'center', flexDirection:'column', gap:8 }}>
-                  <div style={{ fontSize:32, opacity:0.15 }}>🦾</div>
-                  <div style={{ color:'#333', fontSize:11, letterSpacing:2 }}>SELECT VIDEO BELOW</div>
-                </div>
-            }
+            {fileLoaded ? (
+              <>
+                <video ref={videoRef} src={videoSrc||undefined}
+                  style={{ width:'100%', height:'100%', display:'block', position:'absolute', inset:0 }}
+                  preload="auto" controls={false} />
+                <canvas ref={canvasRef}
+                  style={{ width:'100%', height:'100%', display:'block', position:'absolute', inset:0, opacity: selectedAnalysis ? 1 : 0, transition:'opacity 0.2s', pointerEvents:'none' }} />
+                {!selectedAnalysis && (
+                  <div style={{ position:'absolute', bottom:8, left:'50%', transform:'translateX(-50%)', background:'rgba(0,0,0,0.7)', color:'#555', fontSize:10, padding:'4px 12px', letterSpacing:1 }}>
+                    CLICK A LABEL TO SEE POSE OVERLAY
+                  </div>
+                )}
+              </>
+            ) : (
+              <div style={{ width:'100%', height:'100%', display:'flex', alignItems:'center', justifyContent:'center', flexDirection:'column', gap:8 }}>
+                <div style={{ fontSize:32, opacity:0.15 }}>🦾</div>
+                <div style={{ color:'#333', fontSize:11, letterSpacing:2 }}>SELECT VIDEO BELOW</div>
+              </div>
+            )}
           </div>
 
           <div style={{ flex:1, overflowY:'auto', padding:14, display:'flex', flexDirection:'column', gap:12 }}>

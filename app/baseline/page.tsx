@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef, useEffect } from 'react'
+import React, { useState, useRef, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
 
 // ── NFHS Rule-Based Signal Detector ──────────────────────────
@@ -69,6 +69,8 @@ interface PastRun {
   recall: number | null
   f1: number | null
   run_group_id: string
+  status: string | null
+  detections: {signalId: string; signalLabel: string; confidence: number; timeSeconds: number}[]
 }
 
 const FPS = 30
@@ -274,9 +276,9 @@ export default function BaselinePage() {
 
   const loadPastRuns = () => {
     supabase.from('mattrack_baseline_runs')
-      .select('id,created_at,filename,detection_count,ground_truth_count,precision,recall,f1,run_group_id')
+      .select('id,created_at,filename,detection_count,ground_truth_count,precision,recall,f1,run_group_id,status,detections')
       .order('created_at', { ascending: false })
-      .limit(100)
+      .limit(200)
       .then(({ data }) => {
         if (data) {
           setPastRuns(data as PastRun[])
@@ -476,6 +478,16 @@ export default function BaselinePage() {
     if (error) console.error('Failed to save baseline run:', error.message)
   }
 
+  // ── Remove a video from alreadyScanned so batch will re-run it ──
+  const rescanVideo = async (runId: string, filename: string) => {
+    const { error } = await supabase.from('mattrack_baseline_runs').delete().eq('id', runId)
+    if (error) { showToast('Delete failed: ' + error.message); return }
+    const base = filename.replace(/\.[^.]+$/, '').toLowerCase()
+    setAlreadyScanned(prev => { const s = new Set(prev); s.delete(base); return s })
+    setPastRuns(prev => prev.filter(r => r.id !== runId))
+    showToast(`${filename.replace(/\.[^.]+$/, '')} queued for rescan`)
+  }
+
   // ── Batch baseline ───────────────────────────────────────────
   const startBatch = async () => {
     if (!poseModel || batchQueue.length === 0) return
@@ -633,12 +645,12 @@ export default function BaselinePage() {
         })}
       </div>
 
-      <div style={{ display:'flex', flex:1, overflow:'hidden' }}>
+      <div style={{ display:'flex', flex:1, overflow:'hidden', minHeight:0 }}>
 
         {/* ── SINGLE MODE ── */}
         {!batchMode && (
           <>
-            <div style={{ flex:'0 0 340px', borderRight:'1px solid #1a1a2e', display:'flex', flexDirection:'column' }}>
+            <div style={{ flex:'0 0 340px', borderRight:'1px solid #1a1a2e', display:'flex', flexDirection:'column', height:'100%', overflow:'hidden' }}>
           <div style={{ flex:1, overflowY:'auto', padding:16, display:'flex', flexDirection:'column', gap:14 }}>
               <div>
                 <div style={{ fontSize:10, color:'#555', letterSpacing:2, marginBottom:8 }}>SELECT VIDEO</div>
@@ -797,7 +809,7 @@ export default function BaselinePage() {
         {/* ── BATCH MODE ── */}
         {batchMode && (
           <>
-            <div style={{ flex:'0 0 360px', borderRight:'1px solid #1a1a2e', display:'flex', flexDirection:'column' }}>
+            <div style={{ flex:'0 0 360px', borderRight:'1px solid #1a1a2e', display:'flex', flexDirection:'column', height:'100%', overflow:'hidden' }}>
               {/* Scrollable list */}
               <div style={{ flex:1, overflowY:'auto', padding:16, display:'flex', flexDirection:'column', gap:14 }}>
 
@@ -951,73 +963,158 @@ export default function BaselinePage() {
             </div>
           </>
         )}
-      {/* ── HISTORY PANEL ── */}
-      {showHistory && (
-        <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden' }}>
-          <div style={{ padding:'10px 16px', borderBottom:'1px solid #1a1a2e', fontSize:10, color:'#444', letterSpacing:2, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-            <span>PAST BASELINE RUNS — {pastRuns.length} total</span>
-            <button onClick={loadPastRuns} style={{ background:'transparent', border:'1px solid #1a1a2e', color:'#555', padding:'4px 10px', cursor:'pointer', fontFamily:'inherit', fontSize:10 }}>REFRESH</button>
-          </div>
-          <div style={{ flex:1, overflowY:'auto' }}>
-            {pastRuns.length === 0 ? (
-              <div style={{ padding:32, textAlign:'center', color:'#222', fontSize:11 }}>No baseline runs saved yet — run a scan first</div>
-            ) : (() => {
-              // Group by run_group_id
-              const groups: Record<string, PastRun[]> = {}
-              for (const r of pastRuns) {
-                const g = r.run_group_id || r.id
-                if (!groups[g]) groups[g] = []
-                groups[g].push(r)
-              }
-              return Object.entries(groups).map(([groupId, runs]) => {
-                const date = new Date(runs[0].created_at).toLocaleString()
-                const withEval = runs.filter(r => r.f1 !== null)
-                const avgF1 = withEval.length > 0 ? withEval.reduce((s,r) => s + (r.f1 || 0), 0) / withEval.length : null
-                return (
-                  <div key={groupId} style={{ borderBottom:'2px solid #0d0d1a' }}>
-                    {/* Group header */}
-                    <div style={{ padding:'8px 16px', background:'#0d0d1a', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-                      <div>
-                        <div style={{ fontSize:11, color:'#fff' }}>{runs.length === 1 ? runs[0].filename.replace(/\.[^.]+$/,'') : `Batch — ${runs.length} videos`}</div>
-                        <div style={{ fontSize:9, color:'#444', marginTop:2 }}>{date}</div>
+      {/* ── HISTORY / DASHBOARD PANEL ── */}
+      {showHistory && (() => {
+        // Compute summary stats
+        const totalDetections = pastRuns.reduce((s,r) => s + (r.detection_count||0), 0)
+        const zeroRuns = pastRuns.filter(r => (r.detection_count||0) === 0)
+        const withGT = pastRuns.filter(r => (r.ground_truth_count||0) > 0 && r.f1 !== null)
+        const avgF1 = withGT.length > 0 ? withGT.reduce((s,r) => s+(r.f1||0),0)/withGT.length : null
+        const avgDetections = pastRuns.length > 0 ? Math.round(totalDetections / pastRuns.length) : 0
+
+        // Signal breakdown across all runs
+        const sigCounts: Record<string,{label:string,count:number}> = {}
+        for (const r of pastRuns) {
+          for (const d of (r.detections||[])) {
+            if (!sigCounts[d.signalId]) sigCounts[d.signalId] = {label:d.signalLabel, count:0}
+            sigCounts[d.signalId].count++
+          }
+        }
+        const sigList = Object.entries(sigCounts).sort((a,b)=>b[1].count-a[1].count)
+        const maxSigCount = sigList[0]?.[1].count || 1
+
+        // Sort state
+        type SortKey = 'filename'|'detections'|'date'
+        const [sortKey, setSortKey] = React.useState<SortKey>('date')
+        const [sortAsc, setSortAsc] = React.useState(false)
+        const [filterZero, setFilterZero] = React.useState(false)
+
+        const sorted = [...pastRuns]
+          .filter(r => !filterZero || (r.detection_count||0) === 0)
+          .sort((a,b) => {
+            let av: number|string = 0, bv: number|string = 0
+            if (sortKey==='filename') { av=a.filename; bv=b.filename }
+            else if (sortKey==='detections') { av=a.detection_count||0; bv=b.detection_count||0 }
+            else { av=a.created_at; bv=b.created_at }
+            return sortAsc ? (av>bv?1:-1) : (av<bv?1:-1)
+          })
+
+        const toggleSort = (k: SortKey) => { if(sortKey===k) setSortAsc(p=>!p); else {setSortKey(k);setSortAsc(false)} }
+
+        return (
+          <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden' }}>
+
+            {/* Header */}
+            <div style={{ padding:'10px 16px', borderBottom:'1px solid #1a1a2e', fontSize:10, color:'#444', letterSpacing:2, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+              <span>BASELINE RESULTS — {pastRuns.length} videos</span>
+              <button onClick={loadPastRuns} style={{ background:'transparent', border:'1px solid #1a1a2e', color:'#555', padding:'4px 10px', cursor:'pointer', fontFamily:'inherit', fontSize:10 }}>↺ REFRESH</button>
+            </div>
+
+            <div style={{ flex:1, overflowY:'auto' }}>
+
+              {/* Summary cards */}
+              <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:1, background:'#111', margin:'12px 16px', border:'1px solid #1a1a2e' }}>
+                {[
+                  { label:'VIDEOS', value: String(pastRuns.length), color:'#38bdf8' },
+                  { label:'AVG DETECTIONS', value: String(avgDetections), color:'#fbbf24' },
+                  { label:'ZERO DETECTIONS', value: String(zeroRuns.length), color: zeroRuns.length>0?'#f87171':'#00ff88' },
+                  { label:'AVG F1', value: avgF1!==null ? `${(avgF1*100).toFixed(0)}%` : 'NO GT', color: avgF1===null?'#333':avgF1>0.7?'#00ff88':avgF1>0.4?'#fbbf24':'#f87171' },
+                ].map(c => (
+                  <div key={c.label} style={{ background:'#0d0d1a', padding:'10px 8px', textAlign:'center' }}>
+                    <div style={{ fontSize:18, fontWeight:'bold', color:c.color }}>{c.value}</div>
+                    <div style={{ fontSize:8, color:'#444', letterSpacing:1, marginTop:2 }}>{c.label}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Signal breakdown */}
+              {sigList.length > 0 && (
+                <div style={{ margin:'0 16px 16px', background:'#0d0d1a', border:'1px solid #1a1a2e', padding:12 }}>
+                  <div style={{ fontSize:10, color:'#555', letterSpacing:2, marginBottom:10 }}>SIGNAL TYPE BREAKDOWN</div>
+                  {sigList.map(([id, s]) => (
+                    <div key={id} style={{ marginBottom:7 }}>
+                      <div style={{ display:'flex', justifyContent:'space-between', marginBottom:2 }}>
+                        <span style={{ fontSize:10, color:'#888' }}>{s.label}</span>
+                        <span style={{ fontSize:10, color:'#fff', fontWeight:'bold' }}>{s.count}</span>
                       </div>
-                      {avgF1 !== null && (
-                        <div style={{ textAlign:'right' }}>
-                          <div style={{ fontSize:16, fontWeight:'bold', color: avgF1>0.7?'#00ff88':avgF1>0.4?'#fbbf24':'#f87171' }}>{(avgF1*100).toFixed(0)}%</div>
-                          <div style={{ fontSize:9, color:'#444' }}>AVG F1</div>
-                        </div>
-                      )}
+                      <div style={{ height:4, background:'#111', borderRadius:2 }}>
+                        <div style={{ width:`${(s.count/maxSigCount)*100}%`, height:'100%', background:'#38bdf8', borderRadius:2 }} />
+                      </div>
                     </div>
-                    {/* Per-video rows — only show if batch */}
-                    {runs.length > 1 && runs.map((r, i) => (
-                      <div key={i} style={{ padding:'8px 16px 8px 28px', borderBottom:'1px solid #111', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-                        <div>
-                          <div style={{ fontSize:10, color:'#888' }}>{r.filename.replace(/\.[^.]+$/,'')}</div>
-                          <div style={{ fontSize:9, color:'#444' }}>{r.detection_count} detections · {r.ground_truth_count ?? 0} GT</div>
+                  ))}
+                  <div style={{ marginTop:8, fontSize:9, color:'#333' }}>
+                    ⚠ Pin/Fall and Out of Bounds dominate — likely BlazePose picking up wrestlers/coaches instead of ref
+                  </div>
+                </div>
+              )}
+
+              {/* Zero detections callout */}
+              {zeroRuns.length > 0 && (
+                <div style={{ margin:'0 16px 12px', background:'#1a0a0a', border:'1px solid #f87171', padding:10 }}>
+                  <div style={{ fontSize:10, color:'#f87171', letterSpacing:2, marginBottom:6 }}>⚠ {zeroRuns.length} VIDEOS NEED RESCAN</div>
+                  <div style={{ fontSize:9, color:'#555', marginBottom:8 }}>These ran before the CORS fix and returned 0 due to the tainted canvas bug, not real results.</div>
+                  <button onClick={() => setFilterZero(p=>!p)}
+                    style={{ background:'transparent', border:'1px solid #f87171', color:'#f87171', padding:'4px 10px', cursor:'pointer', fontFamily:'inherit', fontSize:9, letterSpacing:1 }}>
+                    {filterZero ? 'SHOW ALL' : 'SHOW ZERO ONLY'}
+                  </button>
+                </div>
+              )}
+
+              {/* Sortable table */}
+              <div style={{ margin:'0 16px 16px' }}>
+                {/* Table header */}
+                <div style={{ display:'grid', gridTemplateColumns:'1fr 80px 60px 80px', gap:4, padding:'6px 8px', background:'#0d0d1a', borderBottom:'1px solid #1a1a2e', fontSize:9, color:'#555', letterSpacing:1 }}>
+                  {([['filename','FILENAME'],['detections','DETECTIONS'],['date','DATE']] as [SortKey,string][]).map(([k,l]) => (
+                    <div key={k} onClick={()=>toggleSort(k)} style={{ cursor:'pointer', color:sortKey===k?'#38bdf8':'#555', display:'flex', alignItems:'center', gap:3 }}>
+                      {l} {sortKey===k ? (sortAsc?'↑':'↓') : ''}
+                    </div>
+                  ))}
+                  <div style={{ fontSize:9, color:'#555' }}>ACTION</div>
+                </div>
+                {/* Rows */}
+                {sorted.map(r => {
+                  const isZero = (r.detection_count||0) === 0
+                  const detColor = isZero ? '#f87171' : (r.detection_count||0) > 100 ? '#fbbf24' : '#00ff88'
+                  return (
+                    <div key={r.id} style={{ display:'grid', gridTemplateColumns:'1fr 80px 60px 80px', gap:4, padding:'8px', borderBottom:'1px solid #111', background:isZero?'#1a0808':'transparent', alignItems:'center' }}>
+                      <div>
+                        <div style={{ fontSize:10, color: isZero?'#f87171':'#ccc', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                          {r.filename.replace(/\.[^.]+$/,'')}
                         </div>
-                        {r.f1 !== null ? (
-                          <div style={{ display:'flex', gap:12, fontSize:10 }}>
-                            <span style={{ color:'#555' }}>P:{((r.precision||0)*100).toFixed(0)}%</span>
-                            <span style={{ color:'#555' }}>R:{((r.recall||0)*100).toFixed(0)}%</span>
-                            <span style={{ fontWeight:'bold', color: (r.f1||0)>0.7?'#00ff88':(r.f1||0)>0.4?'#fbbf24':'#f87171' }}>F1:{((r.f1||0)*100).toFixed(0)}%</span>
+                        {(r.ground_truth_count||0) > 0 && r.f1 !== null && (
+                          <div style={{ fontSize:9, color:'#444', marginTop:2 }}>
+                            F1:{((r.f1||0)*100).toFixed(0)}% P:{((r.precision||0)*100).toFixed(0)}% R:{((r.recall||0)*100).toFixed(0)}%
                           </div>
-                        ) : (
-                          <span style={{ fontSize:9, color:'#333' }}>no GT</span>
                         )}
                       </div>
-                    ))}
-                  </div>
-                )
-              })
-            })()}
+                      <div style={{ fontSize:12, fontWeight:'bold', color:detColor, textAlign:'center' }}>
+                        {r.detection_count||0}
+                        {(r.ground_truth_count||0)>0 && <div style={{fontSize:8,color:'#444'}}>{r.ground_truth_count} GT</div>}
+                      </div>
+                      <div style={{ fontSize:9, color:'#444', textAlign:'center' }}>
+                        {new Date(r.created_at).toLocaleDateString()}
+                      </div>
+                      <div>
+                        <button onClick={() => rescanVideo(r.id, r.filename)}
+                          style={{ background:'transparent', border:`1px solid ${isZero?'#f87171':'#333'}`, color:isZero?'#f87171':'#555', padding:'3px 6px', cursor:'pointer', fontFamily:'inherit', fontSize:9, letterSpacing:1, width:'100%' }}>
+                          ↺ RESCAN
+                        </button>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+
+            </div>
           </div>
-        </div>
-      )}
+        )
+      })()}
 
       </div>
     </div>
   )
 }
+
 
 
 

@@ -55,7 +55,7 @@ interface BatchResult {
   detections: Detection[]
   groundTruth: GroundTruth[]
   evalResult: EvalResult | null
-  status: 'pending' | 'running' | 'done' | 'error'
+  status: 'pending' | 'running' | 'done' | 'error' | 'skipped'
   error?: string
 }
 
@@ -270,12 +270,21 @@ export default function BaselinePage() {
 
   const showToast = (msg:string) => { setToast(msg); setTimeout(()=>setToast(null),3500) }
 
+  const [alreadyScanned, setAlreadyScanned] = useState<Set<string>>(new Set())
+
   const loadPastRuns = () => {
     supabase.from('mattrack_baseline_runs')
       .select('id,created_at,filename,detection_count,ground_truth_count,precision,recall,f1,run_group_id')
       .order('created_at', { ascending: false })
       .limit(100)
-      .then(({ data }) => { if (data) setPastRuns(data as PastRun[]) })
+      .then(({ data }) => {
+        if (data) {
+          setPastRuns(data as PastRun[])
+          setAlreadyScanned(new Set(data.map((r: PastRun) =>
+            r.filename.replace(/\.[^.]+$/, '').toLowerCase()
+          )))
+        }
+      })
   }
 
   useEffect(() => {
@@ -486,6 +495,15 @@ export default function BaselinePage() {
     for (let i = 0; i < batchQueue.length; i++) {
       if (batchStopRef.current) break
       setBatchIdx(i)
+
+      // Skip if already scanned in a previous run
+      const baseFilename = batchQueue[i].filename.replace(/\.[^.]+$/, '').toLowerCase()
+      if (alreadyScanned.has(baseFilename)) {
+        results[i].status = 'done'
+        results[i].detections = []
+        setBatchResults([...results])
+        continue
+      }
 
       results[i].status = 'running'
       setBatchResults([...results])
@@ -898,7 +916,7 @@ export default function BaselinePage() {
                 </div>
               ) : (
                 batchResults.map((r, i) => {
-                  const statusColor = r.status === 'done' ? '#00ff88' : r.status === 'error' ? '#f87171' : r.status === 'running' ? '#38bdf8' : '#333'
+                  const statusColor = r.status === 'done' ? '#00ff88' : r.status === 'error' ? '#f87171' : r.status === 'running' ? '#38bdf8' : r.status === 'skipped' ? '#444' : '#333'
                   return (
                     <div key={i} style={{ padding:'12px 16px', borderBottom:'1px solid #111', borderLeft:`3px solid ${statusColor}` }}>
                       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:4 }}>
@@ -1000,6 +1018,7 @@ export default function BaselinePage() {
     </div>
   )
 }
+
 
 
 

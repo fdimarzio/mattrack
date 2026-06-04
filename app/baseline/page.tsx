@@ -317,6 +317,7 @@ export default function BaselinePage() {
     onProgress: (pct: number) => void
   ): Promise<Detection[]> => {
     const duration = videoEl.duration
+    if (!duration || duration < 0.1) return []
     const totalFrames = Math.floor(duration * FPS / SAMPLE_RATE)
     const allDetections: Detection[] = []
 
@@ -324,50 +325,64 @@ export default function BaselinePage() {
     canvas.width = 320; canvas.height = 180
     const ctx = canvas.getContext('2d')!
 
+    // Attach canvas to DOM so GPU can render to it (needed for BlazePose)
+    canvas.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:320px;height:180px;'
+    document.body.appendChild(canvas)
+
     let prevKps: { name: string; x: number; y: number; score: number }[] | null = null
 
-    for (let fi = 0; fi < totalFrames; fi++) {
-      if (batchStopRef.current) break
-      const frameNum = fi * SAMPLE_RATE
-      const time = frameNum / FPS
-      if (time >= duration) break
+    try {
+      for (let fi = 0; fi < totalFrames; fi++) {
+        if (batchStopRef.current) break
+        const frameNum = fi * SAMPLE_RATE
+        const time = frameNum / FPS
+        if (time >= duration) break
 
-      videoEl.currentTime = time
-      await new Promise<void>(r => {
-        const h = () => { videoEl.removeEventListener('seeked', h); r() }
-        videoEl.addEventListener('seeked', h)
-        setTimeout(r, 500)
-      })
-
-      ctx.drawImage(videoEl, 0, 0, 320, 180)
-
-      try {
-        const detection: any = await new Promise(r => {
-          ;(model as any).detect(canvas, (res: any) => r(res))
+        // Seek and wait for frame decode — with generous timeout
+        videoEl.currentTime = time
+        await new Promise<void>(r => {
+          const h = () => { videoEl.removeEventListener('seeked', h); r() }
+          videoEl.addEventListener('seeked', h)
+          setTimeout(r, 1500)  // 1.5s fallback for slow seeks
         })
-        const poses = Array.isArray(detection) ? detection : (detection?.poses || [])
-        const topPose = poses[0]
-        const rawKps = topPose?.keypoints || topPose?.pose?.keypoints || []
-        const kps = rawKps
-          .filter((k: any) => (k.confidence || k.score || 0) > 0.2)
-          .map((k: any) => ({
-            name: (k.name || k.part || '').toLowerCase().replace(' ','_'),
-            x: (k.x !== undefined ? k.x : k.position?.x || 0) / 320,
-            y: (k.y !== undefined ? k.y : k.position?.y || 0) / 180,
-            score: k.confidence || k.score || 0,
-          }))
+        // Extra tick to ensure frame is painted
+        await new Promise(r => setTimeout(r, 30))
 
-        if (kps.length > 4) {
-          const frameDetections = applyNFHSRules(kps, prevKps, frameNum)
-          allDetections.push(...frameDetections)
+        ctx.drawImage(videoEl, 0, 0, 320, 180)
+
+        try {
+          // detect() with 3s timeout — if model hangs, skip frame and continue
+          const detection: any = await Promise.race([
+            new Promise(r => { (model as any).detect(canvas, (res: any) => r(res)) }),
+            new Promise(r => setTimeout(() => r(null), 3000))
+          ])
+          if (detection) {
+            const poses = Array.isArray(detection) ? detection : (detection?.poses || [])
+            const topPose = poses[0]
+            const rawKps = topPose?.keypoints || topPose?.pose?.keypoints || []
+            const kps = rawKps
+              .filter((k: any) => (k.confidence || k.score || 0) > 0.2)
+              .map((k: any) => ({
+                name: (k.name || k.part || '').toLowerCase().replace(' ','_'),
+                x: (k.x !== undefined ? k.x : k.position?.x || 0) / 320,
+                y: (k.y !== undefined ? k.y : k.position?.y || 0) / 180,
+                score: k.confidence || k.score || 0,
+              }))
+            if (kps.length > 4) {
+              allDetections.push(...applyNFHSRules(kps, prevKps, frameNum))
+            }
+            prevKps = kps
+          }
+        } catch { /* skip frame */ }
+
+        // Update progress every 10 frames
+        if (fi % 10 === 0) {
+          onProgress(Math.round((fi / totalFrames) * 100))
+          await new Promise(r => setTimeout(r, 0))  // yield to UI
         }
-        prevKps = kps
-      } catch { /* skip frame */ }
-
-      if (fi % 20 === 0) {
-        onProgress(Math.round((fi / totalFrames) * 100))
-        await new Promise(r => setTimeout(r, 0))
       }
+    } finally {
+      document.body.removeChild(canvas)
     }
 
     return clusterDetections(allDetections)
@@ -844,4 +859,5 @@ export default function BaselinePage() {
     </div>
   )
 }
+
 

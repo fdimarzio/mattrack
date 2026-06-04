@@ -55,8 +55,14 @@ def create_app():
                 })
         return jsonify({ 'videos': videos, 'folder': VIDEO_FOLDER, 'count': len(videos) })
 
-    @app.route('/video/<filename>')
+    @app.route('/video/<filename>', methods=['GET','OPTIONS'])
     def serve_video(filename):
+        if request.method == 'OPTIONS':
+            resp = Response('')
+            resp.headers['Access-Control-Allow-Origin'] = '*'
+            resp.headers['Access-Control-Allow-Methods'] = 'GET, OPTIONS'
+            resp.headers['Access-Control-Allow-Headers'] = 'Range, Content-Type'
+            return resp
         folder = Path(VIDEO_FOLDER)
         # Case-insensitive search
         match = None
@@ -94,11 +100,16 @@ def create_app():
                     'Accept-Ranges': 'bytes',
                     'Content-Length': str(length),
                     'Content-Type': mime,
+                    'Access-Control-Allow-Origin': '*',
+                    'Cross-Origin-Resource-Policy': 'cross-origin',
                 }
             )
             return response
         else:
-            return send_file(str(match), mimetype=mime)
+            resp = send_file(str(match), mimetype=mime)
+            resp.headers['Access-Control-Allow-Origin'] = '*'
+            resp.headers['Cross-Origin-Resource-Policy'] = 'cross-origin'
+            return resp
 
     return app
 
@@ -128,3 +139,4 @@ if __name__ == '__main__':
 
     app = create_app()
     app.run(host='0.0.0.0', port=PORT, debug=False, threaded=True)
+

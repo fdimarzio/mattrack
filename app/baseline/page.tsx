@@ -432,19 +432,18 @@ export default function BaselinePage() {
       }
       results[i].groundTruth = gt
 
-      // Create a hidden video element for this file
-      const videoEl = document.createElement('video')
+      // Reuse videoRef — same reliable seeking as single-video mode
+      const videoEl = videoRef.current!
       videoEl.src = batchQueue[i].url
-      videoEl.preload = 'auto'
-      videoEl.muted = true
-      videoEl.style.display = 'none'
-      document.body.appendChild(videoEl)
+      videoEl.load()
 
       try {
         await new Promise<void>((resolve, reject) => {
-          videoEl.onloadedmetadata = () => resolve()
-          videoEl.onerror = () => reject(new Error('Video load failed'))
-          setTimeout(() => reject(new Error('Timeout')), 15000)
+          const onMeta = () => { videoEl.removeEventListener('loadedmetadata', onMeta); resolve() }
+          const onErr  = () => { videoEl.removeEventListener('error', onErr); reject(new Error('Video load failed')) }
+          videoEl.addEventListener('loadedmetadata', onMeta)
+          videoEl.addEventListener('error', onErr)
+          setTimeout(() => reject(new Error('Load timeout — check video server')), 20000)
         })
 
         const clustered = await scanVideo(videoEl, poseModel, (pct) => {
@@ -456,8 +455,6 @@ export default function BaselinePage() {
       } catch (err: any) {
         results[i].status = 'error'
         results[i].error = err?.message || 'Unknown error'
-      } finally {
-        document.body.removeChild(videoEl)
       }
 
       setBatchResults([...results])
@@ -530,7 +527,8 @@ export default function BaselinePage() {
         {/* ── SINGLE MODE ── */}
         {!batchMode && (
           <>
-            <div style={{ flex:'0 0 340px', borderRight:'1px solid #1a1a2e', overflowY:'auto', padding:16, display:'flex', flexDirection:'column', gap:14 }}>
+            <div style={{ flex:'0 0 340px', borderRight:'1px solid #1a1a2e', display:'flex', flexDirection:'column' }}>
+          <div style={{ flex:1, overflowY:'auto', padding:16, display:'flex', flexDirection:'column', gap:14 }}>
               <div>
                 <div style={{ fontSize:10, color:'#555', letterSpacing:2, marginBottom:8 }}>SELECT VIDEO</div>
                 {videos.map(v => (
@@ -553,17 +551,7 @@ export default function BaselinePage() {
                 <div style={{ fontSize:10, color:'#00ff88' }}>✓ Video loaded · {groundTruth.length} ground truth labels</div>
               )}
 
-              {videoSrc && modelReady && (
-                <button onClick={runBaseline} disabled={running} style={{ background:running?'#1a1a2e':'#38bdf8', border:'none', color:running?'#444':'#000', padding:'12px 0', cursor:running?'not-allowed':'pointer', fontFamily:'inherit', fontSize:12, letterSpacing:2, fontWeight:'bold', width:'100%' }}>
-                  {running ? `SCANNING ${progress}%…` : '▶ RUN ZERO-SHOT BASELINE'}
-                </button>
-              )}
 
-              {running && (
-                <div style={{ height:4, background:'#1a1a2e', borderRadius:2 }}>
-                  <div style={{ width:`${progress}%`, height:'100%', background:'#38bdf8', borderRadius:2, transition:'width 0.3s' }} />
-                </div>
-              )}
 
               {evalResult && (
                 <div style={{ background:'#0d0d1a', border:'1px solid #1a1a2e', padding:14 }}>
@@ -595,6 +583,24 @@ export default function BaselinePage() {
                 <div style={{ color:'#555', marginBottom:4 }}>HOW THIS WORKS</div>
                 Applies NFHS rules directly to detected body pose — no training. Arm angles, extension, and body lean are checked against each signal definition. This is your baseline.
               </div>
+          </div>{/* end scrollable */}
+
+          {/* Sticky run bar */}
+          <div style={{ borderTop:'1px solid #1a1a2e', padding:12, background:'#0d0d1a', display:'flex', flexDirection:'column', gap:8 }}>
+            {running ? (
+              <>
+                <div style={{ fontSize:10, color:'#38bdf8', letterSpacing:1 }}>SCANNING… {progress}%</div>
+                <div style={{ height:4, background:'#1a1a2e', borderRadius:2 }}>
+                  <div style={{ width:`${progress}%`, height:'100%', background:'#38bdf8', borderRadius:2, transition:'width 0.3s' }} />
+                </div>
+              </>
+            ) : (
+              <button onClick={runBaseline} disabled={!videoSrc || !modelReady}
+                style={{ background: !videoSrc || !modelReady ? '#1a1a2e' : '#38bdf8', border:'none', color: !videoSrc || !modelReady ? '#333' : '#000', padding:'12px 0', cursor: !videoSrc || !modelReady ? 'not-allowed':'pointer', fontFamily:'inherit', fontSize:12, letterSpacing:2, fontWeight:'bold', width:'100%' }}>
+                {!modelReady ? 'LOAD MODEL FIRST' : !videoSrc ? 'SELECT VIDEO ABOVE' : '▶ RUN ZERO-SHOT BASELINE'}
+              </button>
+            )}
+          </div>
             </div>
 
             {/* Right: detections */}
@@ -680,7 +686,9 @@ export default function BaselinePage() {
         {/* ── BATCH MODE ── */}
         {batchMode && (
           <>
-            <div style={{ flex:'0 0 360px', borderRight:'1px solid #1a1a2e', overflowY:'auto', padding:16, display:'flex', flexDirection:'column', gap:14 }}>
+            <div style={{ flex:'0 0 360px', borderRight:'1px solid #1a1a2e', display:'flex', flexDirection:'column' }}>
+              {/* Scrollable list */}
+              <div style={{ flex:1, overflowY:'auto', padding:16, display:'flex', flexDirection:'column', gap:14 }}>
 
               {!localServer ? (
                 <div style={{ background:'#1a0a0a', border:'1px solid #f87171', padding:16, fontSize:11, color:'#f87171', lineHeight:2 }}>
@@ -733,6 +741,32 @@ export default function BaselinePage() {
                     <div style={{ fontSize:10, color:'#fbbf24' }}>⚠ Load pose model first (top right)</div>
                   )}
                 </>
+              )}
+              </div>{/* end scrollable */}
+
+              {/* Sticky run/stop bar */}
+              {localServer && (
+                <div style={{ borderTop:'1px solid #1a1a2e', padding:12, background:'#0d0d1a', display:'flex', flexDirection:'column', gap:8 }}>
+                  {batchRunning ? (
+                    <>
+                      <div style={{ fontSize:10, color:'#38bdf8', letterSpacing:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                        {batchIdx + 1}/{batchQueue.length}: {batchQueue[batchIdx]?.filename.replace(/\.[^.]+$/,'')}
+                      </div>
+                      <div style={{ height:4, background:'#1a1a2e', borderRadius:2 }}>
+                        <div style={{ width:`${progress}%`, height:'100%', background:'#38bdf8', borderRadius:2, transition:'width 0.3s' }} />
+                      </div>
+                      <button onClick={() => { batchStopRef.current = true }}
+                        style={{ background:'transparent', border:'1px solid #f87171', color:'#f87171', padding:'10px 0', cursor:'pointer', fontFamily:'inherit', fontSize:11, letterSpacing:2, width:'100%' }}>
+                        ■ STOP BATCH
+                      </button>
+                    </>
+                  ) : (
+                    <button onClick={startBatch} disabled={batchQueue.length === 0 || !modelReady}
+                      style={{ background: batchQueue.length === 0 || !modelReady ? '#1a1a2e' : '#38bdf8', border:'none', color: batchQueue.length === 0 || !modelReady ? '#333' : '#000', padding:'12px 0', cursor: batchQueue.length === 0 || !modelReady ? 'not-allowed':'pointer', fontFamily:'inherit', fontSize:12, letterSpacing:2, fontWeight:'bold', width:'100%' }}>
+                      {!modelReady ? 'LOAD MODEL FIRST' : batchQueue.length === 0 ? 'SELECT VIDEOS ABOVE' : `▶ RUN BATCH (${batchQueue.length} videos)`}
+                    </button>
+                  )}
+                </div>
               )}
 
               {/* Aggregate stats */}
@@ -810,3 +844,4 @@ export default function BaselinePage() {
     </div>
   )
 }
+

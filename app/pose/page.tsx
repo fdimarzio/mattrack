@@ -68,7 +68,36 @@ export default function PosePage() {
   const [selectedResult, setSelectedResult] = useState<PoseResult | null>(null)
 
   const [toast, setToast] = useState<string | null>(null)
+  const [localServer, setLocalServer] = useState(false)
+  const [localVideos, setLocalVideos] = useState<{filename:string,url:string,size_mb:number}[]>([])
+  const [checkingServer, setCheckingServer] = useState(false)
   const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(null), 3500) }
+
+  // Check for local video server on mount
+  useEffect(() => {
+    const checkServer = async () => {
+      setCheckingServer(true)
+      try {
+        const res = await fetch('http://localhost:7432/ping', { signal: AbortSignal.timeout(2000) })
+        if (res.ok) {
+          setLocalServer(true)
+          const vidRes = await fetch('http://localhost:7432/videos')
+          const data = await vidRes.json()
+          setLocalVideos(data.videos || [])
+        }
+      } catch {
+        setLocalServer(false)
+      }
+      setCheckingServer(false)
+    }
+    checkServer()
+  }, [])
+
+  const loadFromLocalServer = (vid: {filename:string,url:string,size_mb:number}) => {
+    setVideoSrc(vid.url)
+    setFileLoaded(true)
+    showToast(`${vid.filename} loaded from local server ✓`)
+  }
 
   // Load video list from DB on mount
   useEffect(() => {
@@ -326,16 +355,77 @@ export default function PosePage() {
                 <div style={{ fontSize:10, color:'#666', letterSpacing:2, marginBottom:8 }}>
                   STEP 2 — LOAD THE VIDEO FILE
                 </div>
-                <div style={{ fontSize:10, color:'#444', marginBottom:10, lineHeight:1.7 }}>
-                  Find <strong style={{ color:'#aaa' }}>{selectedVideo.filename.replace(/\s*\(\d{4}.*?\)/,'')}</strong> on your computer and select it.
-                </div>
-                <button onClick={() => fileInputRef.current?.click()} style={{
-                  ...btn, width:'100%', padding:'10px 0', textAlign:'center',
-                  color: fileLoaded ? '#00ff88' : '#a78bfa',
-                  borderColor: fileLoaded ? '#00ff88' : '#a78bfa',
-                }}>
-                  {fileLoaded ? `✓ FILE LOADED` : '↑ SELECT FILE FROM COMPUTER'}
-                </button>
+
+                {localServer && localVideos.length > 0 ? (
+                  // Local server running — show file list
+                  <div>
+                    <div style={{ fontSize:9, color:'#00ff88', marginBottom:8 }}>✓ Local video server detected</div>
+                    {(() => {
+                      const baseName = selectedVideo.filename.replace(/\s*\(\d{4}.*?\)/,'').replace(/\.[^.]+$/,'').toLowerCase()
+                      const matches = localVideos.filter(v => v.filename.replace(/\.[^.]+$/,'').toLowerCase() === baseName)
+                      const others = localVideos.filter(v => v.filename.replace(/\.[^.]+$/,'').toLowerCase() !== baseName)
+                      return (
+                        <div>
+                          {matches.length > 0 && (
+                            <div style={{ marginBottom:8 }}>
+                              <div style={{ fontSize:9, color:'#555', marginBottom:4 }}>MATCHING FILE</div>
+                              {matches.map(v => (
+                                <button key={v.filename} onClick={() => loadFromLocalServer(v)} style={{
+                                  display:'block', width:'100%', textAlign:'left',
+                                  background: fileLoaded && videoSrc === v.url ? '#0d2e0d' : '#0d0d1a',
+                                  border:`1px solid ${fileLoaded && videoSrc === v.url ? '#00ff88' : '#00ff88'}`,
+                                  color:'#00ff88', padding:'10px 12px', cursor:'pointer',
+                                  fontFamily:'inherit', fontSize:11, marginBottom:4,
+                                }}>
+                                  {fileLoaded && videoSrc === v.url ? '✓ ' : '▶ '}{v.filename}
+                                  <span style={{ color:'#555', fontSize:9, marginLeft:8 }}>{v.size_mb}MB</span>
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                          {matches.length === 0 && (
+                            <div style={{ fontSize:10, color:'#fbbf24', marginBottom:8 }}>
+                              No exact match for "{baseName}" — pick from list below or use file picker
+                            </div>
+                          )}
+                          <div style={{ fontSize:9, color:'#333', marginBottom:4 }}>ALL VIDEOS IN FOLDER</div>
+                          <div style={{ maxHeight:160, overflowY:'auto' }}>
+                            {others.slice(0,20).map(v => (
+                              <button key={v.filename} onClick={() => loadFromLocalServer(v)} style={{
+                                display:'block', width:'100%', textAlign:'left',
+                                background:'transparent', border:'1px solid #1a1a2e',
+                                color:'#555', padding:'7px 12px', cursor:'pointer',
+                                fontFamily:'inherit', fontSize:10, marginBottom:3,
+                              }}>
+                                {v.filename} <span style={{ color:'#333', fontSize:9 }}>{v.size_mb}MB</span>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )
+                    })()}
+                  </div>
+                ) : (
+                  // No local server — fallback to file picker
+                  <div>
+                    {checkingServer
+                      ? <div style={{ fontSize:10, color:'#444', marginBottom:8 }}>Checking for local server…</div>
+                      : <div style={{ fontSize:10, color:'#444', marginBottom:8, lineHeight:1.7 }}>
+                          Find <strong style={{ color:'#aaa' }}>{selectedVideo.filename.replace(/\s*\(\d{4}.*?\)/,'')}</strong> on your computer.
+                          <div style={{ marginTop:6, color:'#333' }}>
+                            Tip: run <code style={{ background:'#0a0a0a', padding:'1px 6px', color:'#fbbf24' }}>python scripts/video_server.py</code> from your mattrack folder to auto-load videos.
+                          </div>
+                        </div>
+                    }
+                    <button onClick={() => fileInputRef.current?.click()} style={{
+                      ...btn, width:'100%', padding:'10px 0', textAlign:'center' as const,
+                      color: fileLoaded ? '#00ff88' : '#a78bfa',
+                      borderColor: fileLoaded ? '#00ff88' : '#a78bfa',
+                    }}>
+                      {fileLoaded ? '✓ FILE LOADED' : '↑ SELECT FILE FROM COMPUTER'}
+                    </button>
+                  </div>
+                )}
               </div>
             )}
 

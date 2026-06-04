@@ -117,25 +117,31 @@ export default function PosePage() {
   const loadModel = async () => {
     setModelLoading(true)
     try {
-      // @ts-ignore
-      const { PoseLandmarker, FilesetResolver } = await import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/+esm')
-      const filesetResolver = await FilesetResolver.forVisionTasks(
-        'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm'
-      )
-      const model = await PoseLandmarker.createFromOptions(filesetResolver, {
-        baseOptions: {
-          modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task',
-          delegate: 'GPU'
-        },
-        runningMode: 'IMAGE',
-        numPoses: 3,
+      // Load MediaPipe via script tag (avoids CSP ESM restrictions)
+      await new Promise<void>((resolve, reject) => {
+        if ((window as any).ml5) { resolve(); return }
+        const script = document.createElement('script')
+        script.src = 'https://unpkg.com/ml5@1.2.1/dist/ml5.min.js'
+        script.onload = () => resolve()
+        script.onerror = reject
+        document.head.appendChild(script)
       })
-      setPoseModel(model)
-      setModelReady(true)
-      showToast('MediaPipe model ready ✓')
+      showToast('ML5 loaded — initialising pose model…')
+
+      // Use ml5 bodyPose (wraps MediaPipe BlazePose)
+      await new Promise<void>((resolve, reject) => {
+        const ml5 = (window as any).ml5
+        if (!ml5) { reject(new Error('ml5 not available')); return }
+        const pose = ml5.bodyPose('BlazePose', { runtime: 'mediapipe', enableSmoothing: false }, () => {
+          setPoseModel(pose)
+          setModelReady(true)
+          showToast('Pose model ready ✓')
+          resolve()
+        })
+      })
     } catch (err) {
-      console.error(err)
-      showToast('Model load failed — check console')
+      console.error('Model load error:', err)
+      showToast('Model load failed — see console')
     }
     setModelLoading(false)
   }
@@ -167,18 +173,23 @@ export default function PosePage() {
 
       try {
         const frameCanvas = await extractFrame(targetFrame / fps)
-        // @ts-ignore
-        const detection = poseModel.detect(frameCanvas)
-        const landmarks = detection.landmarks?.[0] || []
+        // Run ml5 bodyPose detection
+        const detection: any = await new Promise(resolve => {
+          ;(poseModel as any).detect(frameCanvas, (results: any) => resolve(results))
+        })
 
-        const KP_NAMES = ['nose','left_eye_inner','left_eye','left_eye_outer','right_eye_inner','right_eye','right_eye_outer','left_ear','right_ear','mouth_left','mouth_right','left_shoulder','right_shoulder','left_elbow','right_elbow','left_wrist','right_wrist','left_pinky','right_pinky','left_index','right_index','left_thumb','right_thumb','left_hip','right_hip','left_knee','right_knee','left_ankle','right_ankle','left_heel','right_heel','left_foot_index','right_foot_index']
+        const poses = Array.isArray(detection) ? detection : (detection?.poses || [])
+        const topPose = poses[0]
+        const rawKps = topPose?.keypoints || topPose?.pose?.keypoints || []
 
-        const keypoints = landmarks
-          .map((lm: {x:number,y:number,visibility:number}, idx: number) => ({
-            name: KP_NAMES[idx] || `kp${idx}`,
-            x: lm.x, y: lm.y, score: lm.visibility || 0
+        const keypoints = rawKps
+          .filter((k: any) => (k.confidence || k.score || 0) > 0.2)
+          .map((k: any) => ({
+            name: (k.name || k.part || 'unknown').toLowerCase().replace(' ', '_'),
+            x: k.x !== undefined ? k.x / frameCanvas.width : (k.position?.x || 0) / frameCanvas.width,
+            y: k.y !== undefined ? k.y / frameCanvas.height : (k.position?.y || 0) / frameCanvas.height,
+            score: k.confidence || k.score || 0,
           }))
-          .filter((k: {score:number}) => k.score > 0.3)
 
         const lw = keypoints.find((k: {name:string}) => k.name === 'left_wrist')
         const rw = keypoints.find((k: {name:string}) => k.name === 'right_wrist')

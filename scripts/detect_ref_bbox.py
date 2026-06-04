@@ -182,3 +182,110 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+
+# ─────────────────────────────────────────────────────────────────
+# WRESTLER COLOR DETECTION
+# ─────────────────────────────────────────────────────────────────
+# Wrestlers are identified by either:
+#   1. Singlet color — whole uniform is red or green
+#   2. Ankle band   — neutral singlet with a small colored band at ankle
+#
+# The ankle band is the MORE RELIABLE signal because:
+#   - Always same location (ankle/lower leg)
+#   - Small distinct color patch vs neutral background
+#   - Ref uses this same visual cue to confirm wrestler identity
+#
+# Detection strategy:
+#   1. Detect all people in frame (YOLO)
+#   2. For each non-ref person, sample the lower 15% of their bbox (ankle region)
+#   3. Score that region for red vs green hue dominance
+#   4. Also score full torso for singlet color as fallback
+#   5. Combine: ankle band score (weight 0.7) + singlet score (weight 0.3)
+#
+# Red detection (HSV): hue 0-15 or 165-180, saturation > 80, value > 60
+# Green detection (HSV): hue 40-80, saturation > 80, value > 60
+
+def detect_wrestler_color(crop: np.ndarray) -> dict:
+    """
+    Returns {'color': 'red'|'green'|'unknown', 'method': 'ankle_band'|'singlet'|'none', 'confidence': float}
+    """
+    if crop is None or crop.size == 0:
+        return {'color': 'unknown', 'method': 'none', 'confidence': 0.0}
+
+    h, w = crop.shape[:2]
+    hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+
+    def score_color(region_hsv):
+        # Red: wraps around hue 0/180
+        red_mask = cv2.inRange(region_hsv, (0, 80, 60), (15, 255, 255))
+        red_mask2 = cv2.inRange(region_hsv, (165, 80, 60), (180, 255, 255))
+        red_pct = (np.sum(red_mask > 0) + np.sum(red_mask2 > 0)) / region_hsv.shape[0] / region_hsv.shape[1]
+        # Green
+        green_mask = cv2.inRange(region_hsv, (40, 80, 60), (80, 255, 255))
+        green_pct = np.sum(green_mask > 0) / region_hsv.shape[0] / region_hsv.shape[1]
+        return red_pct, green_pct
+
+    # Ankle region: bottom 15% of bounding box
+    ankle_hsv = hsv[int(h * 0.85):, :]
+    ankle_red, ankle_green = score_color(ankle_hsv)
+
+    # Torso region: middle 50% of bounding box (singlet fallback)
+    torso_hsv = hsv[int(h * 0.2):int(h * 0.7), int(w * 0.1):int(w * 0.9)]
+    torso_red, torso_green = score_color(torso_hsv)
+
+    # Weighted combine: ankle band gets 70% weight
+    red_score   = ankle_red   * 0.7 + torso_red   * 0.3
+    green_score = ankle_green * 0.7 + torso_green * 0.3
+
+    method = 'ankle_band' if max(ankle_red, ankle_green) > max(torso_red, torso_green) else 'singlet'
+    threshold = 0.05  # minimum color coverage to make a call
+
+    if red_score > green_score and red_score > threshold:
+        return {'color': 'red', 'method': method, 'confidence': min(1.0, red_score / (red_score + green_score + 0.001))}
+    elif green_score > red_score and green_score > threshold:
+        return {'color': 'green', 'method': method, 'confidence': min(1.0, green_score / (red_score + green_score + 0.001))}
+    else:
+        return {'color': 'unknown', 'method': 'none', 'confidence': 0.0}
+
+
+def detect_wrestlers_in_frame(frame: np.ndarray, ref_bbox: dict | None, frame_w: int, frame_h: int):
+    """
+    Find the two wrestlers (non-ref people) and detect their colors.
+    Returns list of {'bbox': ..., 'color': ..., 'side': 'left'|'right', 'confidence': ...}
+    """
+    try:
+        from ultralytics import YOLO
+        model = YOLO('yolov8n.pt')
+        results = model(frame, classes=[0], verbose=False)
+        wrestlers = []
+
+        for result in results:
+            for box in result.boxes:
+                x1, y1, x2, y2 = box.xyxy[0].tolist()
+                # Skip if this is the ref bbox
+                if ref_bbox:
+                    rx = ref_bbox['x'] * frame_w
+                    ry = ref_bbox['y'] * frame_h
+                    rw = ref_bbox['w'] * frame_w
+                    rh = ref_bbox['h'] * frame_h
+                    overlap_x = max(0, min(x2, rx+rw) - max(x1, rx))
+                    overlap_y = max(0, min(y2, ry+rh) - max(y1, ry))
+                    if overlap_x * overlap_y > 0.5 * rw * rh:
+                        continue  # this is the ref
+
+                crop = frame[int(y1):int(y2), int(x1):int(x2)]
+                color_result = detect_wrestler_color(crop)
+                center_x = (x1 + x2) / 2 / frame_w
+                wrestlers.append({
+                    'bbox': {'x': x1/frame_w, 'y': y1/frame_h, 'w': (x2-x1)/frame_w, 'h': (y2-y1)/frame_h},
+                    'color': color_result['color'],
+                    'method': color_result['method'],
+                    'confidence': color_result['confidence'],
+                    'side': 'left' if center_x < 0.5 else 'right',
+                    'center_x': center_x,
+                })
+
+        return sorted(wrestlers, key=lambda w: w['center_x'])
+    except ImportError:
+        return []

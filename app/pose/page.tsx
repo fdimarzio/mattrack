@@ -142,6 +142,65 @@ export default function PosePage() {
     video.addEventListener('seeked', handler)
   })
 
+  // Detect wrestler color from canvas region
+  // Checks ankle band first (more reliable), falls back to singlet color
+  const detectWrestlerColor = (canvas: HTMLCanvasElement, bboxX: number, bboxY: number, bboxW: number, bboxH: number): 'red' | 'green' | 'unknown' => {
+    const ctx = canvas.getContext('2d')!
+    const cw = canvas.width, ch = canvas.height
+
+    // Sample ankle region (bottom 15% of person bbox)
+    const ax = Math.floor(bboxX * cw)
+    const ay = Math.floor((bboxY + bboxH * 0.85) * ch)
+    const aw = Math.floor(bboxW * cw)
+    const ah = Math.floor(bboxH * 0.15 * ch)
+
+    if (aw <= 0 || ah <= 0) return 'unknown'
+
+    const ankleData = ctx.getImageData(ax, ay, Math.max(1, aw), Math.max(1, ah)).data
+    const torsoData = ctx.getImageData(
+      Math.floor(bboxX * cw), Math.floor((bboxY + bboxH * 0.2) * ch),
+      Math.max(1, aw), Math.max(1, Math.floor(bboxH * 0.5 * ch))
+    ).data
+
+    let ankleRed = 0, ankleGreen = 0, torsoRed = 0, torsoGreen = 0
+
+    // Ankle pixels
+    for (let i = 0; i < ankleData.length; i += 4) {
+      const r = ankleData[i], g = ankleData[i+1], b = ankleData[i+2]
+      const max = Math.max(r,g,b), min = Math.min(r,g,b), delta = max - min
+      if (delta > 50 && max > 60) {  // saturated pixel
+        const hue = max === r ? ((g-b)/delta + (g<b?6:0)) * 60
+                  : max === g ? ((b-r)/delta + 2) * 60
+                  : ((r-g)/delta + 4) * 60
+        if ((hue < 20 || hue > 340)) ankleRed++
+        else if (hue > 90 && hue < 160) ankleGreen++
+      }
+    }
+
+    // Torso pixels (singlet fallback)
+    for (let i = 0; i < torsoData.length; i += 4) {
+      const r = torsoData[i], g = torsoData[i+1], b = torsoData[i+2]
+      const max = Math.max(r,g,b), min = Math.min(r,g,b), delta = max - min
+      if (delta > 50 && max > 60) {
+        const hue = max === r ? ((g-b)/delta + (g<b?6:0)) * 60
+                  : max === g ? ((b-r)/delta + 2) * 60
+                  : ((r-g)/delta + 4) * 60
+        if ((hue < 20 || hue > 340)) torsoRed++
+        else if (hue > 90 && hue < 160) torsoGreen++
+      }
+    }
+
+    // Weight ankle 70%, torso 30%
+    const totalAnkle = ankleData.length / 4
+    const totalTorso = torsoData.length / 4
+    const redScore   = (ankleRed / totalAnkle) * 0.7 + (torsoRed / totalTorso) * 0.3
+    const greenScore = (ankleGreen / totalAnkle) * 0.7 + (torsoGreen / totalTorso) * 0.3
+
+    if (redScore > greenScore && redScore > 0.03) return 'red'
+    if (greenScore > redScore && greenScore > 0.03) return 'green'
+    return 'unknown'
+  }
+
   // Compute arm metrics from keypoints
   const computeArmMetrics = (keypoints: PoseKeypoint[]) => {
     const kpByName = Object.fromEntries(keypoints.map(k => [k.name, k]))

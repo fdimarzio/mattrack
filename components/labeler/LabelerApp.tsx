@@ -69,6 +69,12 @@ interface SavedLabel {
   is_negative_sample: boolean
   period: number
   signal: Signal
+  peak_frame?: number
+  is_ambiguous?: boolean
+  is_occluded?: boolean
+  review_notes?: string
+  lighting_quality?: string
+  ref_distance?: string
 }
 
 interface MatchData {
@@ -90,8 +96,158 @@ interface ExistingMatch {
   mattrack_videos: { filename: string }
 }
 
+interface LocalVideo {
+  filename: string
+  url: string
+  size_mb: number
+}
+
 type MarkMode = 'start' | 'peak' | 'end'
 type Step = 'home' | 'video' | 'resume_or_new' | 'match' | 'labeling' | 'mark_frames' | 'bbox' | 'whistle' | 'meta'
+
+// ── Edit Modal ────────────────────────────────────────────────
+function EditLabelModal({
+  label,
+  matchData,
+  onSave,
+  onDelete,
+  onClose,
+}: {
+  label: SavedLabel
+  matchData: MatchData
+  onSave: (updated: Partial<SavedLabel>) => Promise<void>
+  onDelete: () => Promise<void>
+  onClose: () => void
+}) {
+  const [signalId, setSignalId] = useState(label.signal_id)
+  const [startFrame, setStartFrame] = useState(label.start_frame)
+  const [peakFrame, setPeakFrame] = useState(label.peak_frame ?? label.start_frame)
+  const [endFrame, setEndFrame] = useState(label.end_frame)
+  const [confidence, setConfidence] = useState(label.label_confidence)
+  const [period, setPeriod] = useState(label.period)
+  const [isNeg, setIsNeg] = useState(label.is_negative_sample)
+  const [isOcc, setIsOcc] = useState(label.is_occluded ?? false)
+  const [isAmb, setIsAmb] = useState(label.is_ambiguous ?? false)
+  const [notes, setNotes] = useState(label.review_notes ?? '')
+  const [saving, setSaving] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+
+  const selectedSig = SIGNALS.find(s => s.id === signalId) || label.signal
+
+  const handleSave = async () => {
+    setSaving(true)
+    await onSave({
+      signal_id: signalId,
+      signal_label: selectedSig.label,
+      signal_category: selectedSig.category,
+      points_awarded: isNeg ? 0 : selectedSig.points,
+      start_frame: startFrame,
+      peak_frame: peakFrame,
+      end_frame: endFrame,
+      label_confidence: confidence,
+      period,
+      is_negative_sample: isNeg,
+      is_occluded: isOcc,
+      is_ambiguous: isAmb,
+      review_notes: notes || undefined,
+    })
+    setSaving(false)
+  }
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', zIndex: 1000, display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '16px 8px', overflowY: 'auto' }}>
+      <div style={{ background: '#0d0d1a', border: '1px solid #38bdf8', width: '100%', maxWidth: 480, display: 'flex', flexDirection: 'column', gap: 0 }}>
+        {/* Header */}
+        <div style={{ background: '#1a1a2e', padding: '10px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #38bdf8' }}>
+          <span style={{ fontSize: 11, color: '#38bdf8', letterSpacing: 2 }}>EDIT LABEL</span>
+          <button onClick={onClose} style={{ background: 'transparent', border: 'none', color: '#555', cursor: 'pointer', fontSize: 18, lineHeight: 1 }}>×</button>
+        </div>
+
+        <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {/* Signal picker */}
+          <div>
+            <div style={{ fontSize: 10, color: '#555', letterSpacing: 1, marginBottom: 6 }}>SIGNAL TYPE</div>
+            <select value={signalId} onChange={e => setSignalId(e.target.value)}
+              style={{ ...inputStyle, fontSize: 12 }}>
+              {Object.entries(SIGNAL_GROUPS).map(([group, sigs]) => (
+                <optgroup key={group} label={group}>
+                  {sigs.map((s: Signal) => (
+                    <option key={s.id} value={s.id}>{s.label}</option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
+            <div style={{ fontSize: 9, color: selectedSig.color, marginTop: 4, letterSpacing: 1 }}>
+              {selectedSig.category.toUpperCase()} {selectedSig.points > 0 ? `· +${selectedSig.points}pts` : ''}
+            </div>
+          </div>
+
+          {/* Frame editing */}
+          <div>
+            <div style={{ fontSize: 10, color: '#555', letterSpacing: 1, marginBottom: 6 }}>FRAMES</div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              {[
+                { label: 'START', val: startFrame, set: setStartFrame },
+                { label: 'PEAK', val: peakFrame, set: setPeakFrame },
+                { label: 'END', val: endFrame, set: setEndFrame },
+              ].map(({ label: fl, val, set }) => (
+                <div key={fl} style={{ flex: 1 }}>
+                  <div style={{ fontSize: 9, color: '#444', marginBottom: 3 }}>{fl}</div>
+                  <input type="number" value={val} onChange={e => set(+e.target.value)}
+                    style={{ ...inputStyle, fontSize: 12, padding: '5px 6px' }} />
+                  <div style={{ fontSize: 9, color: '#333', marginTop: 2 }}>{fmt(val/30)}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Period */}
+          <Row label="PERIOD">
+            {[1, 2, 3].map(p => <button key={p} onClick={() => setPeriod(p)} style={{ ...btn, background: period === p ? '#ff0055' : 'transparent', color: period === p ? '#fff' : '#666', width: 40, padding: '8px 0' }}>{p}</button>)}
+          </Row>
+
+          {/* Confidence */}
+          <Row label="CONFIDENCE (1-5)">
+            {[1, 2, 3, 4, 5].map(n => <button key={n} onClick={() => setConfidence(n)} style={{ ...btn, background: confidence === n ? '#ff0055' : 'transparent', color: confidence === n ? '#fff' : '#666', width: 36, padding: '8px 0' }}>{n}</button>)}
+          </Row>
+
+          {/* Flags */}
+          <Row label="FLAGS">
+            <Toggle value={isNeg} onChange={setIsNeg} labels={['POSITIVE', 'NEGATIVE']} colors={['#00ff88', '#f87171']} />
+            <Toggle value={isOcc} onChange={setIsOcc} labels={['CLEAR', 'OCCLUDED']} colors={['#555', '#fbbf24']} />
+            <Toggle value={isAmb} onChange={setIsAmb} labels={['CLEAR', 'AMBIGUOUS']} colors={['#555', '#fbbf24']} />
+          </Row>
+
+          {/* Notes */}
+          <Row label="NOTES">
+            <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={2}
+              style={{ ...inputStyle, resize: 'vertical' }} placeholder="Optional notes..." />
+          </Row>
+
+          {/* Actions */}
+          <button onClick={handleSave} disabled={saving} style={{ ...primaryBtn, opacity: saving ? 0.5 : 1, background: '#38bdf8', color: '#000' }}>
+            {saving ? 'SAVING…' : '✓ SAVE CHANGES'}
+          </button>
+
+          {!confirmDelete ? (
+            <button onClick={() => setConfirmDelete(true)} style={{ ...btn, width: '100%', padding: '10px 0', color: '#f87171', borderColor: '#f87171', textAlign: 'center' as const }}>
+              DELETE LABEL
+            </button>
+          ) : (
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button onClick={onDelete} style={{ flex: 1, background: '#f87171', border: 'none', color: '#000', padding: '10px 0', cursor: 'pointer', fontFamily: 'inherit', fontSize: 12, fontWeight: 'bold' }}>
+                ✓ CONFIRM DELETE
+              </button>
+              <button onClick={() => setConfirmDelete(false)} style={{ ...btn, flex: 1, padding: '10px 0', textAlign: 'center' as const }}>
+                CANCEL
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
 
 export default function LabelerApp() {
   const videoRef = useRef<HTMLVideoElement>(null)
@@ -110,7 +266,6 @@ export default function LabelerApp() {
   const [matchId, setMatchId] = useState<string | null>(null)
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [matchData, setMatchData] = useState<MatchData>(() => {
-    // Load persisted wrestler names from localStorage
     const saved = typeof window !== 'undefined' ? localStorage.getItem('mattrack_defaults') : null
     const defaults = saved ? JSON.parse(saved) : {}
     return {
@@ -163,7 +318,17 @@ export default function LabelerApp() {
   const [toast, setToast] = useState<{ msg: string; type: string } | null>(null)
   const [totalLabels, setTotalLabels] = useState(0)
 
-  // active panel on mobile: 'video' | 'signals' | 'log'
+  // Edit label state
+  const [editingLabel, setEditingLabel] = useState<SavedLabel | null>(null)
+
+  // Queue mode
+  const [queueMode, setQueueMode] = useState(false)
+  const [localVideos, setLocalVideos] = useState<LocalVideo[]>([])
+  const [localServer, setLocalServer] = useState(false)
+  const [queueList, setQueueList] = useState<LocalVideo[]>([])  // all local vids
+  const [queueIdx, setQueueIdx] = useState(0)
+  const [labeledFilenames, setLabeledFilenames] = useState<Set<string>>(new Set())
+
   const [mobileTab, setMobileTab] = useState<'video' | 'signals' | 'log'>('video')
 
   const showToast = (msg: string, type = 'ok') => {
@@ -174,7 +339,6 @@ export default function LabelerApp() {
   const loadRecentMatches = async () => {
     const { data, error } = await supabase.rpc('get_matches_with_signal_count')
     if (error || !data) {
-      // fallback if RPC fails
       const { data: d2 } = await supabase
         .from('mattrack_matches')
         .select('id, red_name, green_name, event_name, video_id, status, mattrack_videos(filename)')
@@ -183,16 +347,13 @@ export default function LabelerApp() {
         .limit(20)
       setRecentMatches((d2 || []) as unknown as ExistingMatch[])
     } else {
-      // RPC returns JSON — may be array or JSON string
       const parsed = Array.isArray(data) ? data : (data ? [data] : [])
       setRecentMatches(parsed as unknown as ExistingMatch[])
     }
   }
 
-  // Load recent matches and known wrestler names on mount
   useEffect(() => {
     loadRecentMatches()
-    // Pull all unique wrestler names for autocomplete
     supabase.from('mattrack_matches')
       .select('red_name, green_name')
       .then(({ data }) => {
@@ -204,7 +365,110 @@ export default function LabelerApp() {
         })
         setKnownWrestlers(Array.from(names).sort())
       })
+
+    // Check local server and build queue
+    fetch('http://localhost:7432/ping', { signal: AbortSignal.timeout(1500) })
+      .then(r => { if (r.ok) return fetch('http://localhost:7432/videos'); throw new Error('no server') })
+      .then(r => r.json())
+      .then(async d => {
+        if (d?.videos) {
+          setLocalServer(true)
+          setLocalVideos(d.videos)
+          // Find which filenames are already labeled
+          const { data: vids } = await supabase
+            .from('mattrack_videos')
+            .select('filename')
+          if (vids) {
+            const labeled = new Set<string>(vids.map((v: any) =>
+              v.filename.replace(/\s*\(\d{4}.*?\)/, '').replace(/\.[^.]+$/, '').toLowerCase()
+            ))
+            setLabeledFilenames(labeled)
+          }
+        }
+      })
+      .catch(() => {})
   }, [])
+
+  // Queue helpers
+  const isFileLabeledOrSkipped = (filename: string) => {
+    const base = filename.replace(/\.[^.]+$/, '').toLowerCase()
+    return labeledFilenames.has(base)
+  }
+  const unlabeledVideos = queueList.filter(v => !isFileLabeledOrSkipped(v.filename))
+  const currentQueueVideo = unlabeledVideos[queueIdx] ?? null
+
+  const loadQueueVideo = async (qv: LocalVideo) => {
+    setVideoSrc(qv.url)
+    setVideoName(qv.filename)
+    setSavedLabels([])
+    // check existing matches
+    const { data } = await supabase.rpc('get_matches_with_signal_count')
+    const matches = (data || []) as unknown as ExistingMatch[]
+    const base = qv.filename.replace(/\.[^.]+$/, '').toLowerCase()
+    const matching = matches.filter(m => {
+      const fn = m.mattrack_videos?.filename || ''
+      return fn.replace(/\s*\(\d{4}.*?\)/, '').replace(/\.[^.]+$/, '').toLowerCase() === base
+    })
+    setExistingMatches(matching)
+    setStep(matching.length > 0 ? 'resume_or_new' : 'video')
+  }
+
+  const advanceQueue = () => {
+    const next = queueIdx + 1
+    if (next < unlabeledVideos.length) {
+      setQueueIdx(next)
+      loadQueueVideo(unlabeledVideos[next])
+    } else {
+      showToast('Queue complete — all videos labeled! 🎉')
+      setQueueMode(false)
+      setStep('home')
+    }
+  }
+
+  const skipCurrentVideo = async () => {
+    if (!currentQueueVideo) return
+    // Mark as skipped in DB by creating a video record with skip status
+    const vid = videoRef.current
+    const { data: existing } = await supabase
+      .from('mattrack_videos')
+      .select('id')
+      .ilike('filename', `%${currentQueueVideo.filename.replace(/\.[^.]+$/, '')}%`)
+      .limit(1)
+
+    if (!existing || existing.length === 0) {
+      // Create a minimal video record so we don't re-queue it
+      await supabase.from('mattrack_videos').insert({
+        filename: currentQueueVideo.filename,
+        duration_seconds: vid?.duration || 0,
+        fps: 30,
+        camera_angle: 'unknown',
+        venue_type: 'unknown',
+        ambient_whistle_density: 'unknown',
+        estimated_mat_count: 0,
+      })
+    }
+    // Create a match record with status=skipped
+    const { data: vidRow } = await supabase
+      .from('mattrack_videos')
+      .select('id')
+      .ilike('filename', `%${currentQueueVideo.filename.replace(/\.[^.]+$/, '')}%`)
+      .limit(1)
+
+    if (vidRow && vidRow.length > 0) {
+      await supabase.from('mattrack_matches').insert({
+        video_id: vidRow[0].id,
+        red_name: 'N/A',
+        green_name: 'N/A',
+        status: 'skipped',
+        total_periods: 0,
+      })
+    }
+
+    const base = currentQueueVideo.filename.replace(/\.[^.]+$/, '').toLowerCase()
+    setLabeledFilenames(prev => new Set([...prev, base]))
+    showToast(`Skipped: ${currentQueueVideo.filename}`)
+    advanceQueue()
+  }
 
   const endSession = async () => {
     if (sessionId) {
@@ -212,16 +476,22 @@ export default function LabelerApp() {
         .update({ last_active_at: new Date().toISOString(), labels_created: totalLabels })
         .eq('id', sessionId)
     }
+    // Mark this filename as labeled in the queue
+    if (videoName) {
+      const base = videoName.replace(/\s*\(\d{4}.*?\)/, '').replace(/\.[^.]+$/, '').toLowerCase()
+      setLabeledFilenames(prev => new Set([...prev, base]))
+    }
     setVideoSrc(null); setVideoId(null); setMatchId(null); setSessionId(null)
     setSavedLabels([]); setTotalLabels(0); setCurrentMatchName('')
-    setPendingSignal(null); setStep('home'); setMobileTab('video')
-    showToast('Session saved ✓')
-    const { data } = await supabase
-      .from('mattrack_matches')
-      .select('id, red_name, green_name, event_name, video_id, mattrack_videos(filename)')
-      .order('created_at', { ascending: false })
-      .limit(10)
-    setRecentMatches((data || []) as unknown as ExistingMatch[])
+    setPendingSignal(null); setMobileTab('video')
+
+    if (queueMode && currentQueueVideo) {
+      advanceQueue()
+    } else {
+      setStep('home')
+      showToast('Session saved ✓')
+      loadRecentMatches()
+    }
   }
 
   useEffect(() => {
@@ -269,7 +539,6 @@ export default function LabelerApp() {
     setVideoSrc(URL.createObjectURL(file))
     setVideoName(file.name)
     setSavedLabels([])
-    // check for existing matches with this filename
     const { data } = await supabase.rpc('get_matches_with_signal_count')
     const matches = (data || []) as unknown as ExistingMatch[]
     const matching = matches.filter(m => m.mattrack_videos?.filename === file.name)
@@ -282,7 +551,6 @@ export default function LabelerApp() {
     setMatchId(match.id)
     setMatchData(m => ({ ...m, red_name: match.red_name, green_name: match.green_name, event_name: match.event_name || '' }))
     setCurrentMatchName(`${match.red_name} vs ${match.green_name}`)
-    // load existing labels
     const { data } = await supabase
       .from('mattrack_signal_instances')
       .select('*')
@@ -299,7 +567,6 @@ export default function LabelerApp() {
 
   const saveVideoRecord = async () => {
     const vid = videoRef.current
-    // Check for duplicate filename — append timestamp if exists
     const { data: existing } = await supabase
       .from('mattrack_videos')
       .select('id')
@@ -365,12 +632,9 @@ export default function LabelerApp() {
       showToast('Peak marked at F' + f + ' — now mark END frame')
     } else {
       setEndFrame(f)
-      // Skip bbox on mobile (touch device) — go straight to whistle
       const isMobile = window.matchMedia('(max-width: 768px)').matches || navigator.maxTouchPoints > 0
       if (isMobile) {
-        // Skip bbox and whistle on mobile — whistle reviewed separately on desktop
-        setStep('meta')
-        setMobileTab('signals')
+        setStep('meta'); setMobileTab('signals')
         showToast('End marked — set quality and save')
       } else {
         setStep('bbox')
@@ -401,7 +665,6 @@ export default function LabelerApp() {
     setDrawing(false)
   }
 
-  // Touch handlers for mobile bbox drawing
   const onTouchStart = (e: React.TouchEvent<HTMLCanvasElement>) => {
     if (step !== 'bbox') return
     e.preventDefault()
@@ -433,10 +696,9 @@ export default function LabelerApp() {
       period, signal_id: pendingSignal.id, signal_label: pendingSignal.label,
       signal_category: pendingSignal.category,
       points_awarded: isNegative ? 0 : pendingSignal.points,
-      awarded_to: null,  // wrestler color optional — hard to see on phone
+      awarded_to: null,
       is_negative_sample: isNegative,
       bbox_x: bbox?.x, bbox_y: bbox?.y, bbox_w: bbox?.w, bbox_h: bbox?.h,
-      // Whistle deferred to desktop review pass
       has_whistle: false,
       whistle_source_confirmed: false,
       whistle_source_method: pendingSignal.hasWhistle ? 'ambiguous' : null,
@@ -465,22 +727,101 @@ export default function LabelerApp() {
     showToast(`✓ Saved: ${pendingSignal.label} — select next signal`)
   }
 
+  // ── Edit label handlers ──────────────────────────────────────
+  const handleEditSave = async (updated: Partial<SavedLabel>) => {
+    if (!editingLabel) return
+    const { error } = await supabase
+      .from('mattrack_signal_instances')
+      .update({
+        signal_id: updated.signal_id,
+        signal_label: updated.signal_label,
+        signal_category: updated.signal_category,
+        points_awarded: updated.points_awarded,
+        start_frame: updated.start_frame,
+        peak_frame: updated.peak_frame,
+        end_frame: updated.end_frame,
+        label_confidence: updated.label_confidence,
+        period: updated.period,
+        is_negative_sample: updated.is_negative_sample,
+        is_occluded: updated.is_occluded,
+        is_ambiguous: updated.is_ambiguous,
+        review_notes: updated.review_notes,
+      })
+      .eq('id', editingLabel.id)
+    if (error) { showToast('Update failed: ' + error.message, 'err'); return }
+
+    setSavedLabels(prev => prev.map(l => l.id === editingLabel.id ? {
+      ...l, ...updated,
+      signal: SIGNALS.find(s => s.id === updated.signal_id) || l.signal,
+    } as SavedLabel : l))
+    setEditingLabel(null)
+    showToast('Label updated ✓')
+  }
+
+  const handleEditDelete = async () => {
+    if (!editingLabel) return
+    const { error } = await supabase
+      .from('mattrack_signal_instances')
+      .delete()
+      .eq('id', editingLabel.id)
+    if (error) { showToast('Delete failed: ' + error.message, 'err'); return }
+    setSavedLabels(prev => prev.filter(l => l.id !== editingLabel.id))
+    setTotalLabels(n => Math.max(0, n - 1))
+    setEditingLabel(null)
+    showToast('Label deleted')
+  }
+
   const isLabeling = ['labeling', 'mark_frames', 'bbox', 'whistle', 'meta'].includes(step)
+
+  // Queue mode: start queue
+  const startQueue = () => {
+    setQueueMode(true)
+    setQueueIdx(0)
+    setQueueList([...localVideos])
+    const firstUnlabeled = localVideos.find(v => !isFileLabeledOrSkipped(v.filename))
+    if (firstUnlabeled) {
+      loadQueueVideo(firstUnlabeled)
+    } else {
+      showToast('All videos already labeled!')
+      setQueueMode(false)
+    }
+  }
 
   return (
     <div style={{ minHeight: '100vh', background: '#08080f', color: '#e0e0f0', fontFamily: "'Courier New',monospace", display: 'flex', flexDirection: 'column' }}>
+
+      {/* Edit modal */}
+      {editingLabel && (
+        <EditLabelModal
+          label={editingLabel}
+          matchData={matchData}
+          onSave={handleEditSave}
+          onDelete={handleEditDelete}
+          onClose={() => setEditingLabel(null)}
+        />
+      )}
 
       {/* HEADER */}
       <div style={{ background: '#0d0d1a', borderBottom: '2px solid #ff0055', padding: '10px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <div style={{ fontSize: 18, color: '#ff0055', fontWeight: 'bold', letterSpacing: 3 }}>MATTRACK</div>
           {currentMatchName && <div style={{ fontSize: 10, color: '#555' }}>{currentMatchName}</div>}
+          {queueMode && currentQueueVideo && (
+            <div style={{ fontSize: 9, background: '#1a2e1a', border: '1px solid #00ff88', color: '#00ff88', padding: '2px 8px', letterSpacing: 1 }}>
+              QUEUE {queueIdx + 1}/{unlabeledVideos.length}
+            </div>
+          )}
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           {isLabeling && <span style={{ fontSize: 11, color: '#00ff88' }}>{totalLabels} labels</span>}
+          {isLabeling && queueMode && (
+            <button onClick={skipCurrentVideo} style={{ background: 'transparent', border: '1px solid #fbbf24', color: '#fbbf24', padding: '7px 12px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 10, letterSpacing: 1 }}>
+              ⏭ SKIP VIDEO
+            </button>
+          )}
           {isLabeling && (
             <button onClick={endSession} style={{ background: 'transparent', border: '1px solid #00ff88', color: '#00ff88', padding: '7px 14px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 11, letterSpacing: 1, fontWeight: 'bold' }}>
-              ✓ END SESSION
+              {queueMode ? '✓ DONE → NEXT' : '✓ END SESSION'}
             </button>
           )}
           {!isLabeling && (
@@ -499,7 +840,7 @@ export default function LabelerApp() {
         </div>
       )}
 
-      {/* MOBILE TABS — only shown when labeling */}
+      {/* MOBILE TABS */}
       {isLabeling && (
         <div style={{ display: 'flex', borderBottom: '1px solid #1a1a2e', background: '#0d0d1a' }}>
           {(['video', 'signals', 'log'] as const).map(tab => (
@@ -513,18 +854,32 @@ export default function LabelerApp() {
         </div>
       )}
 
-      {/* ── HOME SCREEN ─────────────────────────────────── */}
+      {/* ── HOME SCREEN ── */}
       {step === 'home' && (
         <div style={{ flex: 1, padding: 20, display: 'flex', flexDirection: 'column', gap: 12, overflowY: 'auto' }}>
+
+          {/* Queue mode button — top CTA if local server available */}
+          {localServer && localVideos.length > 0 && (
+            <div style={{ background: '#0a1a0a', border: '1px solid #00ff88', padding: 14, display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div style={{ fontSize: 10, color: '#00ff88', letterSpacing: 2 }}>📂 FOLDER QUEUE</div>
+              <div style={{ fontSize: 11, color: '#555' }}>
+                {localVideos.length} videos · {localVideos.filter(v => isFileLabeledOrSkipped(v.filename)).length} labeled · {unlabeledVideos.length} remaining
+              </div>
+              <button onClick={startQueue} disabled={unlabeledVideos.length === 0}
+                style={{ background: unlabeledVideos.length === 0 ? '#1a1a1a' : '#00ff88', border: 'none', color: unlabeledVideos.length === 0 ? '#333' : '#000', padding: '12px 0', cursor: unlabeledVideos.length === 0 ? 'not-allowed' : 'pointer', fontFamily: 'inherit', fontSize: 13, letterSpacing: 2, fontWeight: 'bold' }}>
+                {unlabeledVideos.length === 0 ? '✓ ALL VIDEOS LABELED' : `▶ START QUEUE (${unlabeledVideos.length} remaining)`}
+              </button>
+            </div>
+          )}
+
           <div style={{ fontSize: 11, color: '#666', letterSpacing: 2, marginBottom: 4 }}>RECENT MATCHES</div>
           {recentMatches.length === 0 && (
             <div style={{ color: '#333', fontSize: 12, padding: '20px 0' }}>No sessions yet — start a new session below</div>
           )}
           {recentMatches.map(m => (
-            <div key={m.id} style={{ background: '#0d0d1a', border: `1px solid ${m.status === 'complete' ? '#00ff88' : '#1a1a2e'}`, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <div key={m.id} style={{ background: '#0d0d1a', border: `1px solid ${m.status === 'complete' ? '#00ff88' : m.status === 'skipped' ? '#555' : '#1a1a2e'}`, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 6, opacity: m.status === 'skipped' ? 0.5 : 1 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                 <div style={{ flex: 1 }}>
-                  {/* Wrestler names — red vs green */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                     <span style={{ fontSize: 13, fontWeight: 'bold', color: '#ff4444' }}>{m.red_name}</span>
                     <span style={{ fontSize: 11, color: '#444' }}>vs</span>
@@ -535,7 +890,7 @@ export default function LabelerApp() {
                     <span>{m.mattrack_videos?.filename}</span>
                   </div>
                   <div style={{ marginTop: 4 }}>
-                    <span style={{ fontSize: 9, padding: '2px 8px', border: `1px solid ${m.status === 'complete' ? '#00ff88' : '#333'}`, color: m.status === 'complete' ? '#00ff88' : '#555', letterSpacing: 1 }}>
+                    <span style={{ fontSize: 9, padding: '2px 8px', border: `1px solid ${m.status === 'complete' ? '#00ff88' : m.status === 'skipped' ? '#555' : '#333'}`, color: m.status === 'complete' ? '#00ff88' : m.status === 'skipped' ? '#555' : '#555', letterSpacing: 1 }}>
                       {(m.status || 'in_progress').toUpperCase().replace('_', ' ')}
                     </span>
                   </div>
@@ -547,39 +902,41 @@ export default function LabelerApp() {
                   <div style={{ fontSize: 9, color: '#444', letterSpacing: 1 }}>LABELS</div>
                 </div>
               </div>
-              {/* Action buttons */}
-              <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
-                <button onClick={async () => {
-                  setExistingMatches([m])
-                  setStep('resume_or_new')
-                  showToast('Load the video file to resume')
-                  setTimeout(() => fileInputRef.current?.click(), 300)
-                }} style={{ flex: 2, background: '#1a1a2e', border: '1px solid #333', color: '#aaa', padding: '8px 0', cursor: 'pointer', fontFamily: 'inherit', fontSize: 11, letterSpacing: 1 }}>
-                  ▶ RESUME
-                </button>
-                <button onClick={async () => {
-                  const newStatus = m.status === 'complete' ? 'in_progress' : 'complete'
-                  await supabase.from('mattrack_matches').update({ status: newStatus }).eq('id', m.id)
-                  setRecentMatches(prev => prev.map(r => r.id === m.id ? { ...r, status: newStatus } : r))
-                  showToast(newStatus === 'complete' ? 'Marked complete ✓' : 'Reopened')
-                }} style={{ flex: 1, background: m.status === 'complete' ? '#0d2e0d' : 'transparent', border: `1px solid ${m.status === 'complete' ? '#00ff88' : '#333'}`, color: m.status === 'complete' ? '#00ff88' : '#555', padding: '8px 0', cursor: 'pointer', fontFamily: 'inherit', fontSize: 10, letterSpacing: 1 }}>
-                  {m.status === 'complete' ? '✓ DONE' : 'COMPLETE'}
-                </button>
-                <button onClick={async () => {
-                  if (!confirm('Delete this match and all its labels?')) return
-                  await supabase.from('mattrack_signal_instances').delete().eq('match_id', m.id)
-                  await supabase.from('mattrack_matches').delete().eq('id', m.id)
-                  setRecentMatches(prev => prev.filter(r => r.id !== m.id))
-                  showToast('Match deleted')
-                }} style={{ flex: 1, background: 'transparent', border: '1px solid #333', color: '#f87171', padding: '8px 0', cursor: 'pointer', fontFamily: 'inherit', fontSize: 10, letterSpacing: 1 }}>
-                  DELETE
-                </button>
-              </div>
+              {m.status !== 'skipped' && (
+                <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+                  <button onClick={async () => {
+                    setExistingMatches([m])
+                    setStep('resume_or_new')
+                    showToast('Load the video file to resume')
+                    setTimeout(() => fileInputRef.current?.click(), 300)
+                  }} style={{ flex: 2, background: '#1a1a2e', border: '1px solid #333', color: '#aaa', padding: '8px 0', cursor: 'pointer', fontFamily: 'inherit', fontSize: 11, letterSpacing: 1 }}>
+                    ▶ RESUME
+                  </button>
+                  <button onClick={async () => {
+                    const newStatus = m.status === 'complete' ? 'in_progress' : 'complete'
+                    await supabase.from('mattrack_matches').update({ status: newStatus }).eq('id', m.id)
+                    setRecentMatches(prev => prev.map(r => r.id === m.id ? { ...r, status: newStatus } : r))
+                    showToast(newStatus === 'complete' ? 'Marked complete ✓' : 'Reopened')
+                  }} style={{ flex: 1, background: m.status === 'complete' ? '#0d2e0d' : 'transparent', border: `1px solid ${m.status === 'complete' ? '#00ff88' : '#333'}`, color: m.status === 'complete' ? '#00ff88' : '#555', padding: '8px 0', cursor: 'pointer', fontFamily: 'inherit', fontSize: 10, letterSpacing: 1 }}>
+                    {m.status === 'complete' ? '✓ DONE' : 'COMPLETE'}
+                  </button>
+                  <button onClick={async () => {
+                    if (!confirm('Delete this match and all its labels?')) return
+                    await supabase.from('mattrack_signal_instances').delete().eq('match_id', m.id)
+                    await supabase.from('mattrack_matches').delete().eq('id', m.id)
+                    setRecentMatches(prev => prev.filter(r => r.id !== m.id))
+                    showToast('Match deleted')
+                  }} style={{ flex: 1, background: 'transparent', border: '1px solid #333', color: '#f87171', padding: '8px 0', cursor: 'pointer', fontFamily: 'inherit', fontSize: 10, letterSpacing: 1 }}>
+                    DELETE
+                  </button>
+                </div>
+              )}
             </div>
           ))}
           <button onClick={() => {
             setVideoSrc(null); setVideoId(null); setMatchId(null); setSessionId(null)
             setSavedLabels([]); setTotalLabels(0); setCurrentMatchName(''); setPendingSignal(null)
+            setQueueMode(false)
             setStep('video')
             setTimeout(() => fileInputRef.current?.click(), 100)
           }} style={{
@@ -590,10 +947,9 @@ export default function LabelerApp() {
         </div>
       )}
 
-      {/* ── VIDEO PANEL ─────────────────────────────────── */}
+      {/* ── VIDEO PANEL ── */}
       <div style={{ display: (!isLabeling || mobileTab === 'video') ? 'flex' : 'none', flexDirection: 'column' }}>
 
-        {/* Video */}
         <div style={{ position: 'relative', background: '#000', aspectRatio: '16/9', width: '100%' }}>
           {videoSrc ? (
             <>
@@ -619,14 +975,8 @@ export default function LabelerApp() {
           )}
           {step === 'bbox' && (
             <div style={{ position: 'absolute', bottom: 8, left: 8, right: 8, display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'center' }}>
-              <div style={{ background: 'rgba(255,0,85,0.95)', color: '#fff', padding: '6px 16px', fontSize: 12, fontWeight: 'bold' }}>
-                DRAG TO BOX THE REF
-              </div>
-              <button onClick={() => {
-                const isMob = navigator.maxTouchPoints > 0
-                setStep(isMob ? 'meta' : 'whistle')
-                setMobileTab('signals')
-              }}
+              <div style={{ background: 'rgba(255,0,85,0.95)', color: '#fff', padding: '6px 16px', fontSize: 12, fontWeight: 'bold' }}>DRAG TO BOX THE REF</div>
+              <button onClick={() => { const isMob = navigator.maxTouchPoints > 0; setStep(isMob ? 'meta' : 'whistle'); setMobileTab('signals') }}
                 style={{ background: 'rgba(0,0,0,0.85)', border: '1px solid #555', color: '#aaa', padding: '6px 20px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 11, letterSpacing: 1 }}>
                 SKIP BBOX →
               </button>
@@ -634,7 +984,6 @@ export default function LabelerApp() {
           )}
         </div>
 
-        {/* Scrubber */}
         {videoSrc && (
           <div style={{ padding: '8px 14px', background: '#0d0d1a' }}>
             <div style={{ position: 'relative', height: 32, cursor: 'pointer' }}
@@ -654,7 +1003,6 @@ export default function LabelerApp() {
           </div>
         )}
 
-        {/* Playback controls */}
         {videoSrc && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '8px 14px', background: '#0d0d1a', borderBottom: '1px solid #1a1a2e', flexWrap: 'wrap' }}>
             <button onClick={() => seekFrame(-30)} style={btn}>«1s</button>
@@ -673,7 +1021,6 @@ export default function LabelerApp() {
           </div>
         )}
 
-        {/* MARK FRAME button — big, easy to tap */}
         {step === 'mark_frames' && pendingSignal && (
           <div style={{ padding: 16, background: '#0d0d1a', borderBottom: '1px solid #1a1a2e' }}>
             <div style={{ color: pendingSignal.color, fontSize: 15, fontWeight: 'bold', marginBottom: 4 }}>{pendingSignal.label}</div>
@@ -700,7 +1047,6 @@ export default function LabelerApp() {
           </div>
         )}
 
-        {/* SETUP PANELS — video env + match metadata */}
         {step === 'video' && videoSrc && (
           <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 8 }}>
             <div style={{ fontSize: 11, color: '#666', letterSpacing: 2, marginBottom: 4 }}>STEP 1 — VIDEO ENVIRONMENT</div>
@@ -708,6 +1054,11 @@ export default function LabelerApp() {
             <Row label="Venue Type"><Sel value={venueType} onChange={setVenueType} opts={['tournament_multi_mat', 'single_mat_gym', 'arena', 'unknown']} /></Row>
             <Row label="Whistle Density"><Sel value={ambientDensity} onChange={setAmbientDensity} opts={['low', 'medium', 'high', 'extreme']} /></Row>
             <Row label="# Mats Audible"><input type="number" value={matCount} onChange={e => setMatCount(+e.target.value)} style={{ ...inputStyle, width: 80 }} /></Row>
+            {queueMode && (
+              <button onClick={skipCurrentVideo} style={{ ...btn, width: '100%', padding: '10px 0', color: '#fbbf24', borderColor: '#fbbf24', textAlign: 'center' as const }}>
+                ⏭ SKIP — NOT RELEVANT
+              </button>
+            )}
             <button onClick={saveVideoRecord} style={{ ...primaryBtn, marginTop: 8 }}>REGISTER VIDEO →</button>
           </div>
         )}
@@ -721,6 +1072,11 @@ export default function LabelerApp() {
               </button>
             ))}
             <button onClick={() => setStep('video')} style={{ ...btn, width: '100%', padding: '12px 0', marginTop: 4 }}>+ NEW SESSION FOR THIS VIDEO</button>
+            {queueMode && (
+              <button onClick={skipCurrentVideo} style={{ ...btn, width: '100%', padding: '10px 0', marginTop: 4, color: '#fbbf24', borderColor: '#fbbf24', textAlign: 'center' as const }}>
+                ⏭ SKIP — NOT RELEVANT
+              </button>
+            )}
           </div>
         )}
 
@@ -728,7 +1084,6 @@ export default function LabelerApp() {
           <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 8 }}>
             <div style={{ fontSize: 11, color: '#666', letterSpacing: 2, marginBottom: 4 }}>STEP 2 — MATCH METADATA</div>
             <div style={{ fontSize: 10, color: '#444', marginBottom: 4 }}>Names are saved as defaults for future matches</div>
-            {/* datalist provides autocomplete from past wrestler names */}
             <datalist id="wrestler-names">
               {knownWrestlers.map(n => <option key={n} value={n} />)}
             </datalist>
@@ -761,15 +1116,19 @@ export default function LabelerApp() {
             </Row>
             <Row label="Event Name"><input value={matchData.event_name} onChange={e => setMatchData(p => ({ ...p, event_name: e.target.value }))} style={inputStyle} /></Row>
             <Row label="Periods"><Sel value={matchData.total_periods} onChange={v => setMatchData(p => ({ ...p, total_periods: +v }))} opts={[2, 3]} /></Row>
+            {queueMode && (
+              <button onClick={skipCurrentVideo} style={{ ...btn, width: '100%', padding: '10px 0', color: '#fbbf24', borderColor: '#fbbf24', textAlign: 'center' as const }}>
+                ⏭ SKIP — NOT RELEVANT
+              </button>
+            )}
             <button onClick={saveMatchRecord} style={{ ...primaryBtn, marginTop: 8 }}>START LABELING →</button>
           </div>
         )}
       </div>
 
-      {/* ── SIGNALS PANEL ─────────────────────────────── */}
+      {/* ── SIGNALS PANEL ── */}
       <div style={{ display: (!isLabeling || mobileTab === 'signals') ? 'flex' : 'none', flexDirection: 'column', flex: 1, overflowY: 'auto' }}>
 
-        {/* Whistle step */}
         {step === 'whistle' && (
           <div style={{ padding: 16, borderBottom: '1px solid #1a1a2e', background: '#0d0d1a' }}>
             <div style={{ fontSize: 11, color: '#fb923c', letterSpacing: 2, marginBottom: 12 }}>🔊 WHISTLE CONFIRMATION</div>
@@ -786,7 +1145,6 @@ export default function LabelerApp() {
           </div>
         )}
 
-        {/* Meta/quality step */}
         {step === 'meta' && (
           <div style={{ padding: 16, borderBottom: '1px solid #1a1a2e', background: '#0d0d1a' }}>
             <div style={{ fontSize: 11, color: '#666', letterSpacing: 2, marginBottom: 12 }}>LABEL QUALITY</div>
@@ -819,7 +1177,6 @@ export default function LabelerApp() {
           </div>
         )}
 
-        {/* Signal chooser */}
         {(step === 'labeling') && (
           <div style={{ padding: 14, overflowY: 'auto' }}>
             <div style={{ fontSize: 10, color: '#555', letterSpacing: 2, marginBottom: 12 }}>TAP A SIGNAL TO BEGIN LABELING</div>
@@ -847,16 +1204,22 @@ export default function LabelerApp() {
         )}
       </div>
 
-      {/* ── LOG PANEL ─────────────────────────────────── */}
+      {/* ── LOG PANEL ── */}
       <div style={{ display: (!isLabeling || mobileTab === 'log') ? 'flex' : 'none', flexDirection: 'column', flex: 1, overflowY: 'auto' }}>
-        <div style={{ padding: '10px 14px', borderBottom: '1px solid #111', fontSize: 10, color: '#444', letterSpacing: 2 }}>
-          {totalLabels} LABELS THIS SESSION
+        <div style={{ padding: '10px 14px', borderBottom: '1px solid #111', fontSize: 10, color: '#444', letterSpacing: 2, display: 'flex', justifyContent: 'space-between' }}>
+          <span>{totalLabels} LABELS THIS SESSION</span>
+          <span style={{ fontSize: 9, color: '#333' }}>TAP TO EDIT</span>
         </div>
         {savedLabels.length === 0
           ? <div style={{ padding: 24, textAlign: 'center', color: '#2a2a3a', fontSize: 11 }}>NO LABELS YET</div>
           : savedLabels.map((l, i) => (
-            <div key={i} onClick={() => { if (videoRef.current) { videoRef.current.currentTime = l.start_frame / fps; setMobileTab('video') } }}
-              style={{ padding: '10px 14px', borderBottom: '1px solid #111', cursor: 'pointer', display: 'flex', gap: 10, borderLeft: `3px solid ${CATEGORY_COLOR[l.signal_category as keyof typeof CATEGORY_COLOR] || '#fff'}` }}>
+            <div key={i}
+              style={{ padding: '10px 14px', borderBottom: '1px solid #111', cursor: 'pointer', display: 'flex', gap: 10, borderLeft: `3px solid ${CATEGORY_COLOR[l.signal_category as keyof typeof CATEGORY_COLOR] || '#fff'}` }}
+              onClick={() => {
+                // Single tap: seek to frame
+                if (videoRef.current) videoRef.current.currentTime = l.start_frame / fps
+                setMobileTab('video')
+              }}>
               <div style={{ minWidth: 55 }}>
                 <div style={{ fontSize: 12, fontWeight: 'bold', color: '#fff' }}>{fmt(l.start_frame / fps)}</div>
                 <div style={{ fontSize: 9, color: '#444' }}>F{l.start_frame}→{l.end_frame}</div>
@@ -871,7 +1234,13 @@ export default function LabelerApp() {
                 </div>
                 {l.awarded_to && <div style={{ fontSize: 9, color: l.awarded_to === 'red' ? '#ff4444' : '#00cc66', marginTop: 2 }}>{l.awarded_to === 'red' ? matchData.red_name : matchData.green_name}</div>}
               </div>
-              <div style={{ fontSize: 9, color: '#333' }}>P{l.period}</div>
+              {/* Edit button */}
+              <button
+                onClick={e => { e.stopPropagation(); setEditingLabel(l) }}
+                style={{ background: 'transparent', border: '1px solid #333', color: '#555', padding: '4px 8px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 9, letterSpacing: 1, alignSelf: 'center', flexShrink: 0 }}>
+                EDIT
+              </button>
+              <div style={{ fontSize: 9, color: '#333', alignSelf: 'center' }}>P{l.period}</div>
             </div>
           ))
         }

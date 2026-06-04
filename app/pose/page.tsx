@@ -122,8 +122,8 @@ export default function PosePage() {
       })
     // Check local server
     fetch('http://localhost:7432/ping', { signal: AbortSignal.timeout(1500) })
-      .then(r => r.ok && fetch('http://localhost:7432/videos'))
-      .then(r => r && (r as Response).json())
+      .then(r => { if (r.ok) return fetch('http://localhost:7432/videos'); throw new Error('no server') })
+      .then(r => r.json())
       .then(d => { if (d?.videos) { setLocalServer(true); setLocalVideos(d.videos) } })
       .catch(() => {})
   }, [])

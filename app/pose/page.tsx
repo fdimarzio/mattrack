@@ -114,6 +114,72 @@ export default function PosePage() {
   const [toast, setToast] = useState<string | null>(null)
   const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(null), 3500) }
 
+  const jumpToAnalysis = (a: FrameAnalysis) => {
+    setSelectedAnalysis(a)
+    const video = videoRef.current
+    if (!video) return
+    video.currentTime = a.frame / 30
+
+    // Redraw stored keypoints on canvas
+    const canvas = canvasRef.current
+    if (!canvas || !a.poseDetected || a.keypoints.length === 0) return
+
+    const redraw = () => {
+      const ctx = canvas.getContext('2d')!
+      canvas.width = video.videoWidth || 1280
+      canvas.height = video.videoHeight || 720
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+
+      const upperKps = ['left_wrist','right_wrist','left_shoulder','right_shoulder','left_elbow','right_elbow']
+      const kpMap = Object.fromEntries(a.keypoints.map(k => [k.name, k]))
+
+      // Draw skeleton connections
+      const pairs = [
+        ['left_shoulder','left_elbow'],['left_elbow','left_wrist'],
+        ['right_shoulder','right_elbow'],['right_elbow','right_wrist'],
+        ['left_shoulder','right_shoulder'],
+        ['left_shoulder','left_hip'],['right_shoulder','right_hip'],
+        ['left_hip','right_hip'],
+      ]
+      ctx.lineWidth = 3
+      pairs.forEach(([a2, b]) => {
+        const ka = kpMap[a2], kb = kpMap[b]
+        if (ka && kb) {
+          ctx.strokeStyle = '#ff0055'
+          ctx.beginPath()
+          ctx.moveTo(ka.x * canvas.width, ka.y * canvas.height)
+          ctx.lineTo(kb.x * canvas.width, kb.y * canvas.height)
+          ctx.stroke()
+        }
+      })
+
+      // Draw keypoints
+      a.keypoints.forEach(kp => {
+        const isArm = upperKps.includes(kp.name)
+        ctx.beginPath()
+        ctx.arc(kp.x * canvas.width, kp.y * canvas.height, isArm ? 8 : 4, 0, Math.PI * 2)
+        ctx.fillStyle = isArm ? '#ff0055' : '#ffffff55'
+        ctx.fill()
+      })
+
+      // Info overlay
+      const matchColor = a.patternMatch === 'strong' ? '#00ff88' : a.patternMatch === 'partial' ? '#fbbf24' : '#f87171'
+      ctx.fillStyle = 'rgba(0,0,0,0.85)'; ctx.fillRect(0, 0, canvas.width, 52)
+      ctx.font = `${Math.round(canvas.height * 0.025)}px monospace`
+      ctx.fillStyle = catColor[a.signalCategory] || '#fff'
+      ctx.fillText(a.signalLabel, 8, 20)
+      ctx.fillStyle = matchColor
+      ctx.font = `${Math.round(canvas.height * 0.02)}px monospace`
+      ctx.fillText(`${a.patternMatch.toUpperCase().replace('_',' ')} — ${a.expectedPattern}`, 8, 44)
+    }
+
+    // Wait for seek to complete then draw
+    const handler = () => { video.removeEventListener('seeked', handler); redraw() }
+    video.addEventListener('seeked', handler)
+    // Also try immediately in case already at that time
+    if (Math.abs(video.currentTime - a.frame / 30) < 0.1) redraw()
+  }
+
   useEffect(() => {
     // Load video list
     supabase.rpc('get_videos_with_label_count')
@@ -566,7 +632,7 @@ export default function PosePage() {
                     )}
                     <div style={{ display:'flex', gap:5, flexWrap:'wrap' }}>
                       {sigAnalyses.map(a => (
-                        <button key={a.instanceId} onClick={() => { setSelectedAnalysis(a); if(videoRef.current) videoRef.current.currentTime = a.frame/30 }} style={{
+                        <button key={a.instanceId} onClick={() => jumpToAnalysis(a)} style={{
                           background: selectedAnalysis?.instanceId===a.instanceId ? '#1a1a2e' : 'transparent',
                           border:`1px solid ${a.patternMatch==='strong'?'#00ff88':a.patternMatch==='partial'?'#fbbf24':a.patternMatch==='no_pose'?'#222':'#f87171'}`,
                           color: a.patternMatch==='strong'?'#00ff88':a.patternMatch==='partial'?'#fbbf24':a.patternMatch==='no_pose'?'#333':'#f87171',
@@ -607,7 +673,7 @@ export default function PosePage() {
               // Timeline view
               <div>
                 {analyses.map((a, i) => (
-                  <div key={i} onClick={() => { setSelectedAnalysis(a); if(videoRef.current) videoRef.current.currentTime = a.frame/30 }}
+                  <div key={i} onClick={() => jumpToAnalysis(a)}
                     style={{ padding:'8px 16px', borderBottom:'1px solid #111', cursor:'pointer', display:'flex', gap:12, alignItems:'center', background: selectedAnalysis?.instanceId===a.instanceId ? '#0d0d1a' : 'transparent', borderLeft:`3px solid ${a.patternMatch==='strong'?'#00ff88':a.patternMatch==='partial'?'#fbbf24':a.patternMatch==='no_pose'?'#222':'#f87171'}` }}>
                     <div style={{ minWidth:50, fontSize:12, fontWeight:'bold' }}>{fmt(a.frame/30)}</div>
                     <div style={{ flex:1 }}>

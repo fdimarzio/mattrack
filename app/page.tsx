@@ -16,6 +16,7 @@ export default function Home() {
           { href: '/export', label: '↓ EXPORT', desc: 'Export training data', color: '#00ff88' },
           { href: '/review', label: '🔍 REVIEW', desc: 'Inference review + whistle QA', color: '#38bdf8' },
           { href: '/pose', label: '🦾 POSE', desc: 'MediaPipe keypoint analysis', color: '#a78bfa' },
+          { href: '/baseline', label: '📊 BASELINE', desc: 'Zero-shot NFHS rule detector', color: '#38bdf8' },
         ].map(p => (
           <a key={p.href} href={p.href} style={{
             background: '#0d0d1a', border: `1px solid ${p.color}33`,

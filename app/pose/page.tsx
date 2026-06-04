@@ -118,7 +118,6 @@ export default function PosePage() {
     setSelectedAnalysis(a)
     const video = videoRef.current
     if (!video) return
-    video.currentTime = a.frame / 30
 
     // Redraw stored keypoints on canvas
     const canvas = canvasRef.current
@@ -173,11 +172,16 @@ export default function PosePage() {
       ctx.fillText(`${a.patternMatch.toUpperCase().replace('_',' ')} — ${a.expectedPattern}`, 8, 44)
     }
 
-    // Wait for seek to complete then draw
-    const handler = () => { video.removeEventListener('seeked', handler); redraw() }
+    // Seek and redraw — use polling fallback for reliability
+    let drawn = false
+    const handler = () => {
+      video.removeEventListener('seeked', handler)
+      if (!drawn) { drawn = true; redraw() }
+    }
     video.addEventListener('seeked', handler)
-    // Also try immediately in case already at that time
-    if (Math.abs(video.currentTime - a.frame / 30) < 0.1) redraw()
+    video.currentTime = a.frame / 30
+    // Fallback: if seeked doesn't fire within 1s, draw anyway
+    setTimeout(() => { if (!drawn) { drawn = true; redraw() } }, 1000)
   }
 
   useEffect(() => {
@@ -477,7 +481,12 @@ export default function PosePage() {
     showToast(`Done — ${strong} strong matches, ${partial} partial, ${results.length-strong-partial} weak/no pose`)
   }
 
-  const bySignal = analyses.reduce((acc, r) => { if (!acc[r.signalId]) acc[r.signalId] = []; acc[r.signalId].push(r); return acc }, {} as Record<string, FrameAnalysis[]>)
+  const bySignal = analyses.reduce((acc, r) => {
+    const key = r.signalId || r.signalLabel
+    if (!acc[key]) acc[key] = []
+    acc[key].push(r)
+    return acc
+  }, {} as Record<string, FrameAnalysis[]>)
 
   const btn: React.CSSProperties = { background:'transparent', border:'1px solid #1a1a2e', color:'#888', padding:'8px 14px', cursor:'pointer', fontFamily:"'Courier New',monospace", fontSize:11 }
 

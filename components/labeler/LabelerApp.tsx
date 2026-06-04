@@ -433,7 +433,7 @@ export default function LabelerApp() {
       period, signal_id: pendingSignal.id, signal_label: pendingSignal.label,
       signal_category: pendingSignal.category,
       points_awarded: isNegative ? 0 : pendingSignal.points,
-      awarded_to: pendingSignal.requiresWrestler ? wrestler : null,
+      awarded_to: null,  // wrestler color optional — hard to see on phone
       is_negative_sample: isNegative,
       bbox_x: bbox?.x, bbox_y: bbox?.y, bbox_w: bbox?.w, bbox_h: bbox?.h,
       // Whistle deferred to desktop review pass
@@ -791,9 +791,12 @@ export default function LabelerApp() {
           <div style={{ padding: 16, borderBottom: '1px solid #1a1a2e', background: '#0d0d1a' }}>
             <div style={{ fontSize: 11, color: '#666', letterSpacing: 2, marginBottom: 12 }}>LABEL QUALITY</div>
             {pendingSignal?.requiresWrestler && (
-              <Row label="Awarded To">
-                <button onClick={() => setWrestler('red')} style={{ flex: 1, padding: '10px', background: wrestler === 'red' ? '#cc3333' : 'transparent', border: '1px solid #ff4444', color: wrestler === 'red' ? '#fff' : '#ff4444', cursor: 'pointer', fontFamily: 'inherit', fontWeight: 'bold', fontSize: 12 }}>{matchData.red_name}</button>
-                <button onClick={() => setWrestler('green')} style={{ flex: 1, padding: '10px', background: wrestler === 'green' ? '#009944' : 'transparent', border: '1px solid #00cc66', color: wrestler === 'green' ? '#fff' : '#00cc66', cursor: 'pointer', fontFamily: 'inherit', fontWeight: 'bold', fontSize: 12, marginLeft: 8 }}>{matchData.green_name}</button>
+              <Row label="Wrestler (optional)">
+                <button onClick={() => setWrestler(wrestler === 'red' ? 'green' : wrestler === 'green' ? null as unknown as 'red' : 'red')}
+                  style={{ ...btn, padding: '8px 16px', color: wrestler === 'red' ? '#ff4444' : wrestler === 'green' ? '#00cc66' : '#333', borderColor: wrestler === 'red' ? '#ff4444' : wrestler === 'green' ? '#00cc66' : '#333' }}>
+                  {wrestler === 'red' ? `🔴 ${matchData.red_name}` : wrestler === 'green' ? `🟢 ${matchData.green_name}` : 'UNKNOWN — tap to set'}
+                </button>
+                <span style={{ fontSize: 9, color: '#333', marginLeft: 6 }}>skip if unsure</span>
               </Row>
             )}
             <Row label="Period">

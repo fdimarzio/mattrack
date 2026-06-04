@@ -215,7 +215,7 @@ export default function ScanPage() {
       signal_label: signal.label,
       signal_category: signal.category,
       points_awarded: signal.points,
-      awarded_to: signal.requiresWrestler ? wrestler : null,
+      awarded_to: null,  // optional — hard to see on phone
       is_negative_sample: false,
       bbox_x: current.refRegion.x,
       bbox_y: current.refRegion.y,
@@ -416,9 +416,10 @@ export default function ScanPage() {
 
                 {/* Wrestler selector + period */}
                 <div style={{ padding: '10px 14px', background: '#0d0d1a', borderBottom: '1px solid #1a1a2e', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                  <span style={{ fontSize: 10, color: '#555' }}>AWARD TO:</span>
-                  <button onClick={() => setWrestler('red')} style={{ ...btn, background: wrestler === 'red' ? '#cc2222' : 'transparent', color: wrestler === 'red' ? '#fff' : '#ff4444', borderColor: '#ff4444', padding: '5px 14px' }}>{redName || 'RED'}</button>
-                  <button onClick={() => setWrestler('green')} style={{ ...btn, background: wrestler === 'green' ? '#007733' : 'transparent', color: wrestler === 'green' ? '#fff' : '#00cc66', borderColor: '#00cc66', padding: '5px 14px' }}>{greenName || 'GREEN'}</button>
+                  <span style={{ fontSize: 10, color: '#555' }}>WRESTLER (optional):</span>
+                  <button onClick={() => setWrestler('red')} style={{ ...btn, background: wrestler === 'red' ? '#cc2222' : 'transparent', color: wrestler === 'red' ? '#fff' : '#ff4444', borderColor: '#ff4444', padding: '5px 10px', fontSize: 10 }}>🔴</button>
+                  <button onClick={() => setWrestler('green')} style={{ ...btn, background: wrestler === 'green' ? '#007733' : 'transparent', color: wrestler === 'green' ? '#fff' : '#00cc66', borderColor: '#00cc66', padding: '5px 10px', fontSize: 10 }}>🟢</button>
+                  <span style={{ fontSize: 9, color: '#333' }}>skip if unsure</span>
                   <span style={{ fontSize: 10, color: '#555', marginLeft: 8 }}>PERIOD:</span>
                   {[1,2,3].map(p => <button key={p} onClick={() => setPeriod(p)} style={{ ...btn, background: period === p ? '#ff0055' : 'transparent', color: period === p ? '#fff' : '#555', padding: '5px 10px', width: 32 }}>{p}</button>)}
                   <span style={{ fontSize: 10, color: '#555', marginLeft: 8 }}>CONF:</span>

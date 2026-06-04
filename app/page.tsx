@@ -15,6 +15,7 @@ export default function Home() {
           { href: '/scan', label: '⚡ SCAN', desc: 'Motion-detect + rapid label', color: '#fbbf24' },
           { href: '/export', label: '↓ EXPORT', desc: 'Export training data', color: '#00ff88' },
           { href: '/review', label: '🔍 REVIEW', desc: 'Inference review + whistle QA', color: '#38bdf8' },
+          { href: '/pose', label: '🦾 POSE', desc: 'MediaPipe keypoint analysis', color: '#a78bfa' },
         ].map(p => (
           <a key={p.href} href={p.href} style={{
             background: '#0d0d1a', border: `1px solid ${p.color}33`,

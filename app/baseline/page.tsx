@@ -59,6 +59,18 @@ interface BatchResult {
   error?: string
 }
 
+interface PastRun {
+  id: string
+  created_at: string
+  filename: string
+  detection_count: number
+  ground_truth_count: number | null
+  precision: number | null
+  recall: number | null
+  f1: number | null
+  run_group_id: string
+}
+
 const FPS = 30
 const SAMPLE_RATE = 3  // analyze every Nth frame (3 = 10fps)
 const MATCH_WINDOW_FRAMES = 45  // 1.5 second window for GT matching
@@ -245,6 +257,8 @@ export default function BaselinePage() {
   const [localServer, setLocalServer] = useState(false)
   const [localVideos, setLocalVideos] = useState<LocalVideo[]>([])
   const [toast, setToast]             = useState<string | null>(null)
+  const [pastRuns, setPastRuns]       = useState<PastRun[]>([])
+  const [showHistory, setShowHistory] = useState(false)
 
   // Batch mode state
   const [batchMode, setBatchMode]     = useState(false)
@@ -256,9 +270,18 @@ export default function BaselinePage() {
 
   const showToast = (msg:string) => { setToast(msg); setTimeout(()=>setToast(null),3500) }
 
+  const loadPastRuns = () => {
+    supabase.from('mattrack_baseline_runs')
+      .select('id,created_at,filename,detection_count,ground_truth_count,precision,recall,f1,run_group_id')
+      .order('created_at', { ascending: false })
+      .limit(100)
+      .then(({ data }) => { if (data) setPastRuns(data as PastRun[]) })
+  }
+
   useEffect(() => {
     supabase.rpc('get_videos_with_label_count')
       .then(({data}) => { if (data) setVideos((data as VideoRecord[]).filter(v=>v.label_count>0)) })
+    loadPastRuns()
     fetch('http://localhost:7432/ping', { signal: AbortSignal.timeout(1500) })
       .then(r => { if (r.ok) return fetch('http://localhost:7432/videos'); throw new Error('no server') })
       .then(r => r.json())
@@ -397,14 +420,51 @@ export default function BaselinePage() {
     const clustered = await scanVideo(videoRef.current, poseModel, setProgress)
     setDetections(clustered)
 
-    if (groundTruth.length > 0) {
-      const result = evaluate(clustered, groundTruth)
-      setEvalResult(result)
-      showToast(`Done — Precision: ${(result.precision*100).toFixed(0)}% · Recall: ${(result.recall*100).toFixed(0)}% · F1: ${(result.f1*100).toFixed(0)}%`)
+    const evalRes = groundTruth.length > 0 ? evaluate(clustered, groundTruth) : null
+    if (evalRes) {
+      setEvalResult(evalRes)
+      showToast(`Done — Precision: ${(evalRes.precision*100).toFixed(0)}% · Recall: ${(evalRes.recall*100).toFixed(0)}% · F1: ${(evalRes.f1*100).toFixed(0)}%`)
     } else {
       showToast(`Done — ${clustered.length} detections (no ground truth to evaluate against)`)
     }
+    // Save to DB
+    const runGroupId = crypto.randomUUID()
+    await saveBaselineRun(selectedVideo?.filename || 'unknown', clustered, groundTruth, evalRes, runGroupId, selectedVideo?.id)
+    loadPastRuns()
     setRunning(false)
+  }
+
+  // ── Save a baseline run to DB ────────────────────────────────
+  const saveBaselineRun = async (
+    filename: string,
+    detections: Detection[],
+    gt: GroundTruth[],
+    evalResult: EvalResult | null,
+    runGroupId: string,
+    vidId?: string
+  ) => {
+    const record: Record<string, unknown> = {
+      filename,
+      run_group_id: runGroupId,
+      model_version: 'blazepose-zero-shot-v1',
+      sample_rate: SAMPLE_RATE,
+      fps: FPS,
+      detections: JSON.parse(JSON.stringify(detections)),
+      detection_count: detections.length,
+      ground_truth_count: gt.length,
+      status: 'done',
+    }
+    if (vidId) record.video_id = vidId
+    if (evalResult) {
+      record.true_positives  = evalResult.truePositives
+      record.false_positives = evalResult.falsePositives
+      record.false_negatives = evalResult.falseNegatives
+      record.precision       = evalResult.precision
+      record.recall          = evalResult.recall
+      record.f1              = evalResult.f1
+    }
+    const { error } = await supabase.from('mattrack_baseline_runs').insert(record)
+    if (error) console.error('Failed to save baseline run:', error.message)
   }
 
   // ── Batch baseline ───────────────────────────────────────────
@@ -412,6 +472,7 @@ export default function BaselinePage() {
     if (!poseModel || batchQueue.length === 0) return
     setBatchRunning(true)
     batchStopRef.current = false
+    const runGroupId = crypto.randomUUID()  // all videos in this batch share one group ID
 
     const results: BatchResult[] = batchQueue.map(v => ({
       filename: v.filename,
@@ -467,6 +528,15 @@ export default function BaselinePage() {
         results[i].detections = clustered
         results[i].evalResult = gt.length > 0 ? evaluate(clustered, gt) : null
         results[i].status = 'done'
+        // Save this video's result to DB immediately
+        await saveBaselineRun(
+          batchQueue[i].filename,
+          clustered,
+          gt,
+          results[i].evalResult,
+          runGroupId,
+          vData?.[0]?.id
+        )
       } catch (err: any) {
         results[i].status = 'error'
         results[i].error = err?.message || 'Unknown error'
@@ -477,6 +547,7 @@ export default function BaselinePage() {
     }
 
     setBatchRunning(false)
+    loadPastRuns()
     const done = results.filter(r => r.status === 'done').length
     const withGT = results.filter(r => r.groundTruth.length > 0)
     if (withGT.length > 0) {
@@ -529,12 +600,18 @@ export default function BaselinePage() {
 
       {/* Mode toggle */}
       <div style={{ display:'flex', borderBottom:'1px solid #1a1a2e', background:'#0d0d1a' }}>
-        {(['single', 'batch'] as const).map(mode => (
-          <button key={mode} onClick={() => { setBatchMode(mode === 'batch'); setDetections([]); setEvalResult(null); setBatchResults([]) }}
-            style={{ flex:1, padding:'10px 0', background:((batchMode && mode==='batch') || (!batchMode && mode==='single')) ? '#1a1a2e' : 'transparent', border:'none', borderBottom:((batchMode && mode==='batch') || (!batchMode && mode==='single')) ? '2px solid #38bdf8' : '2px solid transparent', color:((batchMode && mode==='batch') || (!batchMode && mode==='single')) ? '#fff' : '#555', cursor:'pointer', fontFamily:'inherit', fontSize:11, letterSpacing:2, textTransform:'uppercase' }}>
-            {mode === 'single' ? '▶ SINGLE VIDEO' : '⚡ BATCH — ALL VIDEOS'}
-          </button>
-        ))}
+        {([['single','▶ SINGLE VIDEO'],['batch','⚡ BATCH'],['history','📋 HISTORY']] as const).map(([mode, label]) => {
+          const active = mode === 'history' ? showHistory : (!showHistory && (mode === 'batch') === batchMode)
+          return (
+            <button key={mode} onClick={() => {
+              if (mode === 'history') { setShowHistory(true); loadPastRuns() }
+              else { setShowHistory(false); setBatchMode(mode === 'batch'); setDetections([]); setEvalResult(null); setBatchResults([]) }
+            }}
+              style={{ flex:1, padding:'10px 0', background:active?'#1a1a2e':'transparent', border:'none', borderBottom:active?'2px solid #38bdf8':'2px solid transparent', color:active?'#fff':'#555', cursor:'pointer', fontFamily:'inherit', fontSize:11, letterSpacing:2, textTransform:'uppercase' }}>
+              {label}
+            </button>
+          )
+        })}
       </div>
 
       <div style={{ display:'flex', flex:1, overflow:'hidden' }}>
@@ -855,9 +932,73 @@ export default function BaselinePage() {
             </div>
           </>
         )}
+      {/* ── HISTORY PANEL ── */}
+      {showHistory && (
+        <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden' }}>
+          <div style={{ padding:'10px 16px', borderBottom:'1px solid #1a1a2e', fontSize:10, color:'#444', letterSpacing:2, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+            <span>PAST BASELINE RUNS — {pastRuns.length} total</span>
+            <button onClick={loadPastRuns} style={{ background:'transparent', border:'1px solid #1a1a2e', color:'#555', padding:'4px 10px', cursor:'pointer', fontFamily:'inherit', fontSize:10 }}>REFRESH</button>
+          </div>
+          <div style={{ flex:1, overflowY:'auto' }}>
+            {pastRuns.length === 0 ? (
+              <div style={{ padding:32, textAlign:'center', color:'#222', fontSize:11 }}>No baseline runs saved yet — run a scan first</div>
+            ) : (() => {
+              // Group by run_group_id
+              const groups: Record<string, PastRun[]> = {}
+              for (const r of pastRuns) {
+                const g = r.run_group_id || r.id
+                if (!groups[g]) groups[g] = []
+                groups[g].push(r)
+              }
+              return Object.entries(groups).map(([groupId, runs]) => {
+                const date = new Date(runs[0].created_at).toLocaleString()
+                const withEval = runs.filter(r => r.f1 !== null)
+                const avgF1 = withEval.length > 0 ? withEval.reduce((s,r) => s + (r.f1 || 0), 0) / withEval.length : null
+                return (
+                  <div key={groupId} style={{ borderBottom:'2px solid #0d0d1a' }}>
+                    {/* Group header */}
+                    <div style={{ padding:'8px 16px', background:'#0d0d1a', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                      <div>
+                        <div style={{ fontSize:11, color:'#fff' }}>{runs.length === 1 ? runs[0].filename.replace(/\.[^.]+$/,'') : `Batch — ${runs.length} videos`}</div>
+                        <div style={{ fontSize:9, color:'#444', marginTop:2 }}>{date}</div>
+                      </div>
+                      {avgF1 !== null && (
+                        <div style={{ textAlign:'right' }}>
+                          <div style={{ fontSize:16, fontWeight:'bold', color: avgF1>0.7?'#00ff88':avgF1>0.4?'#fbbf24':'#f87171' }}>{(avgF1*100).toFixed(0)}%</div>
+                          <div style={{ fontSize:9, color:'#444' }}>AVG F1</div>
+                        </div>
+                      )}
+                    </div>
+                    {/* Per-video rows — only show if batch */}
+                    {runs.length > 1 && runs.map((r, i) => (
+                      <div key={i} style={{ padding:'8px 16px 8px 28px', borderBottom:'1px solid #111', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                        <div>
+                          <div style={{ fontSize:10, color:'#888' }}>{r.filename.replace(/\.[^.]+$/,'')}</div>
+                          <div style={{ fontSize:9, color:'#444' }}>{r.detection_count} detections · {r.ground_truth_count ?? 0} GT</div>
+                        </div>
+                        {r.f1 !== null ? (
+                          <div style={{ display:'flex', gap:12, fontSize:10 }}>
+                            <span style={{ color:'#555' }}>P:{((r.precision||0)*100).toFixed(0)}%</span>
+                            <span style={{ color:'#555' }}>R:{((r.recall||0)*100).toFixed(0)}%</span>
+                            <span style={{ fontWeight:'bold', color: (r.f1||0)>0.7?'#00ff88':(r.f1||0)>0.4?'#fbbf24':'#f87171' }}>F1:{((r.f1||0)*100).toFixed(0)}%</span>
+                          </div>
+                        ) : (
+                          <span style={{ fontSize:9, color:'#333' }}>no GT</span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )
+              })
+            })()}
+          </div>
+        </div>
+      )}
+
       </div>
     </div>
   )
 }
+
 
 

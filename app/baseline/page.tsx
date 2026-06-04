@@ -302,7 +302,7 @@ export default function BaselinePage() {
     if (localServer) {
       const base = video.filename.replace(/\s*\(\d{4}.*?\)/,'').replace(/\.[^.]+$/,'').toLowerCase()
       const match = localVideos.find(v => v.filename.replace(/\.[^.]+$/,'').toLowerCase() === base)
-      if (match) { setVideoSrc(match.url); showToast(`Auto-loaded ${match.filename} ✓`); return }
+      if (match) { setVideoSrc(match.url); showToast(`Auto-loaded ${match.filename} ✓`); return }  // crossOrigin set on <video> element directly
     }
     setTimeout(() => fileInputRef.current?.click(), 200)
   }
@@ -510,6 +510,7 @@ export default function BaselinePage() {
 
       // Reuse videoRef — same reliable seeking as single-video mode
       const videoEl = videoRef.current!
+      videoEl.crossOrigin = 'anonymous'  // must be set before src to avoid canvas taint
       videoEl.src = batchQueue[i].url
       videoEl.load()
 
@@ -595,7 +596,7 @@ export default function BaselinePage() {
 
       {toast && <div style={{ position:'fixed', top:16, left:'50%', transform:'translateX(-50%)', background:'#38bdf8', color:'#000', padding:'10px 20px', fontFamily:'inherit', fontSize:12, fontWeight:'bold', zIndex:999, maxWidth:'90vw', textAlign:'center' }}>{toast}</div>}
 
-      <video ref={videoRef} src={videoSrc||undefined} style={{ display:'none' }} preload="auto" />
+      <video ref={videoRef} src={videoSrc||undefined} style={{ display:'none' }} preload="auto" crossOrigin="anonymous" />
       <input ref={fileInputRef} type="file" accept="video/*" onChange={handleFile} style={{ display:'none' }} />
 
       {/* Mode toggle */}
@@ -999,6 +1000,7 @@ export default function BaselinePage() {
     </div>
   )
 }
+
 
 
 
